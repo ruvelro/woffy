@@ -61,7 +61,7 @@ get_token() {
 interpret_status() {
   local raw="$1"
   local lowered
-  lowered=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | xargs)
+  lowered=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | xargs || true)
   case "$lowered" in
     "true"|"1"|"yes"|"y"|"si"|"sí")
       printf 'inside'
@@ -70,14 +70,65 @@ interpret_status() {
       printf 'outside'
       ;;
     *)
-      # Algunos endpoints podrían devolver valores distintos; devolvemos unknown si no sabemos
       printf 'unknown'
       ;;
   esac
 }
 
+# Extrae el último SignIn de la respuesta de /api/signs de forma tolerante
+extract_last_signin() {
+  local body="$1"
+  # Si body vacío, devolvemos vacío
+  if [ -z "${body}" ]; then
+    printf ''
+    return
+  fi
+
+  # Probamos varias rutas comunes. jq devuelve vacío si no existe.
+  printf '%s' "$body" | jq -r '
+    try (
+      if type=="array" then
+        (.[-1].SignIn // .[-1].signIn // .[-1].sign_in // empty)
+      elif (has("data") and (.data | type=="array")) then
+        (.data[-1].SignIn // .data[-1].signIn // .data[-1].sign_in // empty)
+      elif has("SignIn") then
+        (.SignIn // .signIn // .sign_in // empty)
+      else
+        empty
+      end
+    ) catch ""' 2>/dev/null || true
+}
+
+# GET a /api/signs con código HTTP y reintento sencillo
+api_get_signs() {
+  local body_and_code resp body http_code attempt=0
+  while [ $attempt -le 1 ]; do
+    body_and_code=$(curl -s -H "Authorization: Bearer $TOKEN" -w "%{http_code}" "$API_URL/api/signs" || true)
+    http_code="${body_and_code: -3}"
+    body="${body_and_code:0:$((${#body_and_code}-3))}"
+    if [ -n "$body" ] && [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    attempt=$((attempt+1))
+    sleep 1
+  done
+  # si falló, devolvemos cuerpo (posible vacío) y exportamos código vía variable
+  printf '%s' "$body"
+  return 1
+}
+
+# POST para realizar fichaje; devuelve código HTTP y cuerpo
+api_post_sign() {
+  local payload="$1"
+  local body_and_code resp body http_code
+  body_and_code=$(curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -w "%{http_code}" -d "$payload" "$API_URL/api/signs" || true)
+  http_code="${body_and_code: -3}"
+  body="${body_and_code:0:$((${#body_and_code}-3))}"
+  printf '%s|%s' "$http_code" "$body"
+}
+
 # Elimina todas las entradas de woffy (in/out) en crontab
-# Útil para limpiar duplicados dejados por reinstalaciones del instalador
 clear_woffy_cron() {
   local tmp
   tmp=$(mktemp)
@@ -89,12 +140,17 @@ clear_woffy_cron() {
 
 case "$COMMAND" in
   in|out)
-    # Obtener token y estado actual
     get_token
 
-    raw_status=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
-    # Intentamos extraer SignIn del último elemento; si no existe, dejamos vacío
-    LAST_SIGNIN=$(printf '%s' "$raw_status" | jq -r '.[-1].SignIn // empty' 2>/dev/null || true)
+    raw_body=$(api_get_signs) || true
+
+    if [ -z "${raw_body:-}" ]; then
+      echo "⚠️ No se obtuvo respuesta válida de la API al consultar el estado (respuesta vacía o error HTTP)."
+      echo "Aborto para evitar duplicados. Vuelve a intentarlo o comprueba conectividad/credenciales."
+      exit 1
+    fi
+
+    LAST_SIGNIN=$(extract_last_signin "$raw_body" || true)
     STATUS=$(interpret_status "$LAST_SIGNIN")
 
     ACTION="clock_in"
@@ -110,38 +166,41 @@ case "$COMMAND" in
       exit 1
     elif [[ "$STATUS" == "unknown" ]]; then
       echo "⚠️ Estado desconocido (no se pudo interpretar la respuesta de la API). Se aborta para evitar duplicados."
-      echo "Respuesta API: $LAST_SIGNIN"
+      echo "Respuesta API (extracto): $(printf '%s' "$LAST_SIGNIN" | sed -n '1,3p')"
       exit 1
     fi
 
-    RESPONSE=$(curl -s -X POST "$API_URL/api/signs" \
-      -H "Authorization: Bearer $TOKEN" \
-      -H "Content-Type: application/json" \
-      -d "{\"signType\":0,\"date\":\"$(date -Iseconds)\",\"action\":\"$ACTION\"}")
+    payload="{\"signType\":0,\"date\":\"$(date -Iseconds)\",\"action\":\"$ACTION\"}"
+    res=$(api_post_sign "$payload")
+    http_code="${res%%|*}"
+    body="${res#*|}"
 
-    # Comprobación mínima de éxito: si la respuesta contiene algún indicio de error, lo mostramos
-    if printf '%s' "$RESPONSE" | jq -e . >/dev/null 2>&1; then
-      # Asumimos éxito si no hay error JSON; puedes afinar esto según la API real
+    if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
       echo "✅ Fichaje '$COMMAND' realizado correctamente."
       tg_send "✅ Fichaje *$COMMAND* realizado a las *$(date +%H:%M)*."
     else
-      echo "❌ Error al realizar el fichaje. Respuesta:"
-      echo "$RESPONSE"
+      echo "❌ Error al realizar el fichaje (HTTP $http_code). Respuesta:"
+      echo "$body"
       exit 1
     fi
     ;;
 
   status)
     get_token
-    raw_status=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
-    LAST_SIGNIN=$(printf '%s' "$raw_status" | jq -r '.[-1].SignIn // empty' 2>/dev/null || true)
+    raw_body=$(api_get_signs) || true
+    if [ -z "${raw_body:-}" ]; then
+      echo "❓ No se pudo obtener estado (API no respondió)."
+      exit 1
+    fi
+    LAST_SIGNIN=$(extract_last_signin "$raw_body" || true)
     STATUS=$(interpret_status "$LAST_SIGNIN")
     if [ "$STATUS" == "inside" ]; then
       echo "📍 Actualmente estás fichado DENTRO."
     elif [ "$STATUS" == "outside" ]; then
       echo "📍 Actualmente estás fichado FUERA."
     else
-      echo "❓ Estado desconocido. Respuesta API: $LAST_SIGNIN"
+      echo "❓ Estado desconocido. Extracto de la respuesta API:"
+      printf '%s\n' "$LAST_SIGNIN" | sed -n '1,10p'
     fi
     ;;
 
@@ -198,7 +257,6 @@ EOF
         fi
         ;;
       clear)
-        # Borra todas las entradas de woffy (in/out)
         clear_woffy_cron
         echo "🧹 Todas las entradas de woffy en crontab han sido eliminadas."
         ;;
@@ -206,7 +264,6 @@ EOF
         TIMES=("09:00" "15:30")
         [ -n "${3:-}" ] && TIMES=("$3")
         TMP_CRON=$(mktemp)
-        # Eliminamos cualquier entrada previa de tipo 'woffy in' (variantes) antes de añadir las nuevas
         crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+in/ && !/# woffy-in/ {print}' > "$TMP_CRON" || true
         for T in "${TIMES[@]}"; do
           IFS=':' read -r HOUR MIN <<< "$T"
