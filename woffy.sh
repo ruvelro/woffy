@@ -20,6 +20,14 @@ tg_send() {
     ${TG_THREAD:+-d message_thread_id=$TG_THREAD} > /dev/null
 }
 
+clear_woffy_cron() {
+  local tmp
+  tmp=$(mktemp)
+  crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+(in|out)/ && !/# woffy-(in|out)/ {print}' > "$tmp" || true
+  crontab "$tmp" || true
+  rm -f "$tmp"
+}
+
 case "$1" in
   in|out)
     STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" | jq -r '.[-1].SignIn')
@@ -73,14 +81,6 @@ case "$1" in
     echo "TG_THREAD=\"$THREAD\"" >> "$CONFIG_FILE"
     echo "✅ Telegram configurado."
     ;;
-
-clear_woffy_cron() {
-  local tmp
-  tmp=$(mktemp)
-  crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+(in|out)/ && !/# woffy-(in|out)/ {print}' > "$tmp" || true
-  crontab "$tmp" || true
-  rm -f "$tmp"
-}
 
   schedule)
     case "${2:-}" in
