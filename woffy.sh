@@ -10,6 +10,16 @@ TOKEN=$(curl -s -X POST "$API_URL/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS" | jq -r .access_token)
 
+tg_send() {
+  [ -z "$TG_TOKEN" ] && return
+  MSG="$1"
+  curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage \
+    -d chat_id="$TG_CHAT_ID" \
+    -d text="$MSG" \
+    -d parse_mode="Markdown" \
+    ${TG_THREAD:+-d message_thread_id=$TG_THREAD} > /dev/null
+}
+
 case "$1" in
   in|out)
     STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" | jq -r '.[-1].SignIn')
@@ -18,9 +28,11 @@ case "$1" in
 
     if [[ "$STATUS" == "true" && "$1" == "in" ]]; then
       echo "❌ Ya estás fichado dentro."
+      tg_send "❌ Ya estás fichado *dentro*."
       exit 1
     elif [[ "$STATUS" == "false" && "$1" == "out" ]]; then
       echo "❌ Ya estás fichado fuera."
+      tg_send "❌ Ya estás fichado *fuera*."
       exit 1
     fi
 
@@ -30,11 +42,16 @@ case "$1" in
       -d '{"signType":0,"date":"'"$(date -Iseconds)"'","action":"'"$ACTION"'"}')
 
     echo "✅ Fichaje '$1' realizado correctamente."
+    tg_send "✅ Fichaje *$1* realizado a las *$(date +%H:%M)*."
     ;;
 
   status)
     STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" | jq -r '.[-1].SignIn')
-    [ "$STATUS" == "true" ] && echo "📍 Actualmente estás fichado DENTRO." || echo "📍 Actualmente estás fichado FUERA."
+    if [ "$STATUS" == "true" ]; then
+      echo "📍 Actualmente estás fichado DENTRO."
+    else
+      echo "📍 Actualmente estás fichado FUERA."
+    fi
     ;;
 
   login)
@@ -43,9 +60,18 @@ case "$1" in
     echo
     echo "WURL_USER=\"$EMAIL\"" > "$CONFIG_FILE"
     echo "WURL_PASS=\"$PASS\"" >> "$CONFIG_FILE"
-    echo "TG_NOTIFY=errors" >> "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
     echo "✅ Configuración actualizada."
+    ;;
+
+  telegram)
+    read -p "Token de bot: " TG
+    read -p "Chat ID: " CHAT
+    read -p "Thread ID (opcional): " THREAD
+    echo "TG_TOKEN=\"$TG\"" >> "$CONFIG_FILE"
+    echo "TG_CHAT_ID=\"$CHAT\"" >> "$CONFIG_FILE"
+    echo "TG_THREAD=\"$THREAD\"" >> "$CONFIG_FILE"
+    echo "✅ Telegram configurado."
     ;;
 
   schedule)
@@ -62,15 +88,29 @@ case "$1" in
         echo "▶️ Tareas programadas reactivadas."
         ;;
       entrada)
-        (crontab -l 2>/dev/null; echo "0 9 * * 1-5 woffy in # woffy-in"; echo "30 15 * * 1-5 woffy in # woffy-in") | sort -u | crontab -
+        TIMES=("09:00" "15:30")
+        [ -n "$3" ] && TIMES=("$3")
+        (crontab -l 2>/dev/null; \
+        for T in "${TIMES[@]}"; do
+          MIN=$(echo $T | cut -d: -f2)
+          HOUR=$(echo $T | cut -d: -f1)
+          echo "$MIN $HOUR * * 1-5 woffy in # woffy-in"
+        done) | sort -u | crontab -
         echo "✅ Fichajes de entrada programados."
         ;;
       salida)
-        (crontab -l 2>/dev/null; echo "0 14 * * 1-5 woffy out # woffy-out"; echo "0 18 * * 1-5 woffy out # woffy-out") | sort -u | crontab -
+        TIMES=("14:00" "18:00")
+        [ -n "$3" ] && TIMES=("$3")
+        (crontab -l 2>/dev/null; \
+        for T in "${TIMES[@]}"; do
+          MIN=$(echo $T | cut -d: -f2)
+          HOUR=$(echo $T | cut -d: -f1)
+          echo "$MIN $HOUR * * 1-5 woffy out # woffy-out"
+        done) | sort -u | crontab -
         echo "✅ Fichajes de salida programados."
         ;;
       *)
-        echo "❌ Uso: woffy schedule {list|pause|resume|entrada|salida}"
+        echo "❌ Uso: woffy schedule {list|pause|resume|entrada [HH:MM]|salida [HH:MM]}"
         exit 1
         ;;
     esac
@@ -82,11 +122,12 @@ case "$1" in
     echo "  out             Fichar salida"
     echo "  status          Consultar estado actual"
     echo "  login           Reconfigurar credenciales"
+    echo "  telegram        Configurar notificaciones"
     echo "  schedule        Gestionar programación en cron"
     echo "      list        Mostrar fichajes programados"
     echo "      pause       Desactivar tareas"
     echo "      resume      Activar tareas"
-    echo "      entrada     Añadir tareas de entrada"
-    echo "      salida      Añadir tareas de salida"
+    echo "      entrada     Añadir tareas de entrada [HH:MM opcional]"
+    echo "      salida      Añadir tareas de salida [HH:MM opcional]"
     ;;
 esac
