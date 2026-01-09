@@ -5,20 +5,58 @@ CONFIG_FILE="$HOME/.woffy.conf"
 [ ! -f "$CONFIG_FILE" ] && echo "❌ Configuración no encontrada. Ejecuta 'woffy login'" && exit 1
 source "$CONFIG_FILE"
 
+tg_send() {
+  [ -z "${TG_TOKEN:-}" ] && return
+
+  local TYPE="$1"   # error | success
+  local MSG="$2"
+
+  case "${TG_NOTIFY:-all}" in
+    all) ;;
+    errors)  [ "$TYPE" != "error" ] && return ;;
+    success) [ "$TYPE" != "success" ] && return ;;
+    *) ;;
+  esac
+
+  curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+    -d chat_id="$TG_CHAT_ID" \
+    -d text="$MSG" \
+    -d parse_mode="Markdown" \
+    ${TG_THREAD:+-d message_thread_id=$TG_THREAD} \
+    > /dev/null
+}
+
+check_deps() {
+  local missing=()
+
+  for cmd in curl jq; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    MSG="❌ Faltan dependencias necesarias: ${missing[*]}"
+    echo "$MSG"
+    echo "Instálalas antes de usar woffy."
+    echo "Ejemplo (Debian/Ubuntu): sudo apt install ${missing[*]}"
+
+    tg_send error "$MSG"
+    exit 1
+  fi
+}
+
+# help no necesita dependencias
+case "$1" in
+  help|"")
+    ;;
+  *)
+    check_deps
+    ;;
+esac
+
 API_URL="https://app.woffu.com"
 TOKEN=$(curl -s -X POST "$API_URL/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS" | jq -r .access_token)
-
-tg_send() {
-  [ -z "$TG_TOKEN" ] && return
-  MSG="$1"
-  curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage \
-    -d chat_id="$TG_CHAT_ID" \
-    -d text="$MSG" \
-    -d parse_mode="Markdown" \
-    ${TG_THREAD:+-d message_thread_id=$TG_THREAD} > /dev/null
-}
 
 clear_woffy_cron() {
   local tmp
@@ -36,11 +74,11 @@ case "$1" in
 
     if [[ "$STATUS" == "true" && "$1" == "in" ]]; then
       echo "❌ Ya estás fichado dentro."
-      tg_send "❌ Ya estás fichado *dentro*."
+      tg_send error "❌ Ya estás fichado *dentro*."
       exit 1
     elif [[ "$STATUS" == "false" && "$1" == "out" ]]; then
       echo "❌ Ya estás fichado fuera."
-      tg_send "❌ Ya estás fichado *fuera*."
+      tg_send error "❌ Ya estás fichado *fuera*."
       exit 1
     fi
 
@@ -50,7 +88,7 @@ case "$1" in
       -d '{"signType":0,"date":"'"$(date -Iseconds)"'","action":"'"$ACTION"'"}')
 
     echo "✅ Fichaje '$1' realizado correctamente."
-    tg_send "✅ Fichaje *$1* realizado a las *$(date +%H:%M)*."
+    tg_send success "✅ Fichaje *$1* realizado a las *$(date +%H:%M)*."
     ;;
 
   status)
@@ -63,24 +101,53 @@ case "$1" in
     ;;
 
   login)
-    read -p "Correo: " EMAIL
-    read -s -p "Contraseña: " PASS
-    echo
-    echo "WURL_USER=\"$EMAIL\"" > "$CONFIG_FILE"
-    echo "WURL_PASS=\"$PASS\"" >> "$CONFIG_FILE"
-    chmod 600 "$CONFIG_FILE"
-    echo "✅ Configuración actualizada."
-    ;;
+  read -p "Correo: " EMAIL
+  read -s -p "Contraseña: " PASS
+  echo
+
+  TMP=$(mktemp)
+
+  # Copiar todo excepto WURL_*
+  grep -v '^WURL_' "$CONFIG_FILE" 2>/dev/null > "$TMP" || true
+
+  {
+    echo "WURL_USER=\"$EMAIL\""
+    echo "WURL_PASS=\"$PASS\""
+  } >> "$TMP"
+
+  mv "$TMP" "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+
+  echo "✅ Credenciales de Woffu actualizadas."
+  ;;
+
 
   telegram)
-    read -p "Token de bot (sin el 'bot' del principio): " TG
-    read -p "Chat ID: " CHAT
-    read -p "Thread ID (opcional): " THREAD
-    echo "TG_TOKEN=\"$TG\"" >> "$CONFIG_FILE"
-    echo "TG_CHAT_ID=\"$CHAT\"" >> "$CONFIG_FILE"
-    echo "TG_THREAD=\"$THREAD\"" >> "$CONFIG_FILE"
-    echo "✅ Telegram configurado."
-    ;;
+  read -p "Token de bot (sin 'bot'): " TG
+  read -p "Chat ID: " CHAT
+  read -p "Thread ID (opcional): " THREAD
+  read -p "Notificaciones (errors | success | all) [all]: " NOTIFY
+
+  NOTIFY=${NOTIFY:-all}
+
+  TMP=$(mktemp)
+
+  # Copiar todo excepto TG_*
+  grep -v '^TG_' "$CONFIG_FILE" 2>/dev/null > "$TMP" || true
+
+  {
+    echo "TG_TOKEN=\"$TG\""
+    echo "TG_CHAT_ID=\"$CHAT\""
+    [ -n "$THREAD" ] && echo "TG_THREAD=\"$THREAD\""
+    echo "TG_NOTIFY=\"$NOTIFY\""
+  } >> "$TMP"
+
+  mv "$TMP" "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
+
+  echo "✅ Telegram configurado (notificaciones: $NOTIFY)."
+  ;;
+
 
   schedule)
     case "${2:-}" in
