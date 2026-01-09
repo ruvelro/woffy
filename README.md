@@ -7,7 +7,7 @@ Ideal para automatizar tus jornadas con `cron`, recibir notificaciones por Teleg
 ## 🚀 Instalación rápida
 
 ```bash
-curl -fsSL https://tu-sitio/install-woffy.sh | bash -s - EMAIL PASSWORD [TG_TOKEN CHAT_ID THREAD_ID]
+curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash -s - EMAIL PASSWORD TG_TOKEN TG_CHAT_ID TG_THREAD_ID
 ```
 
 ## ⚙️ Comandos disponibles
