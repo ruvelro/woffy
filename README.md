@@ -13,8 +13,6 @@ Si no vas a usar Telegram, los tres parámetros TG_* son opcionales. Puedes acti
 
 ## ⚙️ Comandos disponibles
 
-## ⚙️ Comandos disponibles
-
 | Comando                         | Descripción                                                                 |
 |--------------------------------|-----------------------------------------------------------------------------|
 | `woffy in`                     | Ficha la entrada. Si ya estás dentro, muestra error.                        |
