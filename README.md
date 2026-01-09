@@ -13,7 +13,29 @@ Si no vas a usar Telegram, los tres parámetros TG_* son opcionales. Puedes acti
 
 ## ⚙️ Comandos disponibles
 
-woffy in / out / status / login / telegram / schedule list|pause|resume|entrada add|salida add / help
+## ⚙️ Comandos disponibles
+
+| Comando                         | Descripción                                                                 |
+|--------------------------------|-----------------------------------------------------------------------------|
+| `woffy in`                     | Ficha la entrada. Si ya estás dentro, muestra error.                        |
+| `woffy out`                    | Ficha la salida. Si no habías fichado antes, muestra error.                 |
+| `woffy status`                 | Muestra el estado de fichajes del día actual (entrada/salida).             |
+| `woffy login`                  | Cambia el email y la contraseña de acceso a Woffu (modo interactivo).      |
+| `woffy telegram`               | Configura el bot de Telegram (token, chat ID, thread ID).                  |
+| `woffy help`                   | Muestra esta ayuda básica de uso.                                          |
+
+### ⏰ Gestión de horarios (cron)
+
+| Comando                                     | Descripción                                                                    |
+|--------------------------------------------|--------------------------------------------------------------------------------|
+| `woffy schedule list`                      | Muestra las tareas programadas (entradas/salidas automáticas).                |
+| `woffy schedule pause`                     | Pausa las tareas automáticas sin eliminarlas (comentando en `crontab`).       |
+| `woffy schedule resume`                    | Reactiva las tareas pausadas.                                                 |
+| `woffy schedule entrada add HH:MM`         | Añade un fichaje automático de entrada a esa hora.                            |
+| `woffy schedule salida add HH:MM`          | Añade un fichaje automático de salida a esa hora.                             |
+
+> 🧠 **Nota:** los horarios deben indicarse en formato `HH:MM` (24h), y se programan solo de **lunes a viernes**.
+
 
 ## 🕘 Horarios por defecto
 
