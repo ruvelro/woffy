@@ -1,76 +1,48 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
 CONFIG_FILE="$HOME/.woffy.conf"
-API_URL="https://app.woffu.com"
-
-# Verificación comandos mínimos
-for cmd in curl jq crontab mktemp sed awk sort date; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "❌ Necesitas '$cmd' instalado para usar woffy."
-    exit 1
-  fi
-done
-
-tg_send() {
-  [ -z "${TG_TOKEN:-}" ] && return
-  local MSG="$1"
-  local CURL_ARGS=(-s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID" -d "text=$MSG" -d "parse_mode=Markdown")
-  [ -n "${TG_THREAD:-}" ] && CURL_ARGS+=(-d "message_thread_id=$TG_THREAD")
-  curl "${CURL_ARGS[@]}" >/dev/null || true
-}
-
-# Requerir config al inicio (igual que tu script original)
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "❌ Configuración no encontrada. Ejecuta 'woffy login'"
-  exit 1
-fi
+[ ! -f "$CONFIG_FILE" ] && echo "❌ Configuración no encontrada. Ejecuta 'woffy login'" && exit 1
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 
-# Obtener token (igual que tu versión que funcionaba)
+API_URL="https://app.woffu.com"
 TOKEN=$(curl -s -X POST "$API_URL/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS" | jq -r .access_token // empty)
+  -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS" | jq -r '.access_token // empty')
 
-if [ -z "$TOKEN" ]; then
-  echo "❌ No se pudo obtener token. Revisa credenciales con 'woffy login'."
-  exit 1
-fi
+tg_send() {
+  [ -z "${TG_TOKEN:-}" ] && return
+  MSG="$1"
+  CURL_ARGS=(-s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID" -d "text=$MSG" -d "parse_mode=Markdown")
+  [ -n "${TG_THREAD:-}" ] && CURL_ARGS+=(-d "message_thread_id=$TG_THREAD")
+  curl "${CURL_ARGS[@]}" > /dev/null || true
+}
 
-# Interpretación simple del SignIn
-interpret_status_value() {
-  local v="$1"
-  # normalizar
-  case "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]' | xargs)" in
-    "true"|"1"|"yes"|"y"|"si"|"sí") printf "inside" ;;
-    "false"|"0"|"no"|"n") printf "outside" ;;
-    *) printf "" ;;
+# Funciones auxiliares
+interpret_status() {
+  local raw="$1"
+  raw=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | xargs || true)
+  case "$raw" in
+    "true"|"1"|"yes"|"y"|"si"|"sí") printf 'inside' ;;
+    "false"|"0"|"no"|"n") printf 'outside' ;;
+    *) printf 'unknown' ;;
   esac
 }
 
-# Extrae última propiedad SignIn de forma tolerante
 extract_last_signin() {
   local body="$1"
   if [ -z "$body" ]; then
-    printf ""
+    printf ''
     return
   fi
-  printf '%s' "$body" | jq -r 'try (if type=="array" then (.[-1].SignIn // .[-1].signIn // .[-1].sign_in // empty) elif has("data") and (.data|type=="array") then (.data[-1].SignIn // .data[-1].signIn // .data[-1].sign_in // empty) elif has("SignIn") then (.SignIn // .signIn // .sign_in // empty) else empty end) catch ""' 2>/dev/null || true
+  printf '%s' "$body" | jq -r 'try (
+    if type=="array" then .[-1].SignIn // .[-1].signIn // .[-1].sign_in // empty
+    elif has("data") and (.data|type=="array") then .data[-1].SignIn // .data[-1].signIn // .data[-1].sign_in // empty
+    elif has("SignIn") then .SignIn // .signIn // .sign_in // empty
+    else empty end) catch ""' 2>/dev/null || true
 }
 
-# Lee /api/signs con un reintento sencillo
-get_signs_body() {
-  local body
-  body=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
-  if [ -z "$body" ]; then
-    sleep 1
-    body=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
-  fi
-  printf '%s' "$body"
-}
-
-# Borra todas las entradas de woffy (in/out) en crontab
 clear_woffy_cron() {
   local tmp
   tmp=$(mktemp)
@@ -79,19 +51,16 @@ clear_woffy_cron() {
   rm -f "$tmp"
 }
 
-case "${1:-help}" in
+case "$1" in
   in|out)
     CMD="$1"
-
-    # Obtener estado
-    body="$(get_signs_body)"
-    LAST_SIGNIN="$(extract_last_signin "$body")"
-    STATUS="$(interpret_status_value "$LAST_SIGNIN")"
+    STATUS_RAW=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
+    LAST_SIGNIN=$(extract_last_signin "$STATUS_RAW")
+    STATUS=$(interpret_status "$LAST_SIGNIN")
 
     ACTION="clock_in"
     [[ "$CMD" == "out" ]] && ACTION="clock_out"
 
-    # Si la API ha devuelto explicitamente inside/outside, evitamos duplicados
     if [[ "$STATUS" == "inside" && "$CMD" == "in" ]]; then
       echo "❌ Ya estás fichado dentro."
       tg_send "❌ Ya estás fichado *dentro*."
@@ -102,18 +71,18 @@ case "${1:-help}" in
       exit 1
     fi
 
-    # Si no podemos extraer estado (cadena vacía), avisamos pero seguimos (comportamiento próximo al original)
-    if [ -z "$STATUS" ]; then
-      echo "⚠️ No se pudo obtener estado claro de la API (respuesta vacía o inesperada). Intentando fichar de todos modos..."
+    if [ "$STATUS" == "unknown" ]; then
+      echo "⚠️ No se obtuvo un estado claro de la API; se intentará fichar de todos modos (comportamiento conservador similar al original)."
     fi
 
-    RESPONSE=$(curl -s -w "%{http_code}" -o /tmp/woffy_post_response.$$ -X POST "$API_URL/api/signs" \
+    # Post del fichaje (capturamos HTTP code y body)
+    TMP_RESP=$(mktemp)
+    HTTP_CODE=$(curl -s -o "$TMP_RESP" -w "%{http_code}" -X POST "$API_URL/api/signs" \
       -H "Authorization: Bearer $TOKEN" \
       -H "Content-Type: application/json" \
-      -d "{\"signType\":0,\"date\":\"$(date -Iseconds)\",\"action\":\"$ACTION\"}") || true
-    HTTP_CODE="$RESPONSE"
-    BODY_POST="$(cat /tmp/woffy_post_response.$$ 2>/dev/null || true)"
-    rm -f /tmp/woffy_post_response.$$ || true
+      -d "{\"signType\":0,\"date\":\"$(date -Iseconds)\",\"action\":\"$ACTION\"}" || true)
+    BODY_POST=$(cat "$TMP_RESP" 2>/dev/null || true)
+    rm -f "$TMP_RESP"
 
     if [ "${HTTP_CODE:-0}" -ge 200 ] && [ "${HTTP_CODE:-0}" -lt 300 ]; then
       echo "✅ Fichaje '$CMD' realizado correctamente."
@@ -126,9 +95,9 @@ case "${1:-help}" in
     ;;
 
   status)
-    body="$(get_signs_body)"
-    LAST_SIGNIN="$(extract_last_signin "$body")"
-    STATUS="$(interpret_status_value "$LAST_SIGNIN")"
+    STATUS_RAW=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
+    LAST_SIGNIN=$(extract_last_signin "$STATUS_RAW")
+    STATUS=$(interpret_status "$LAST_SIGNIN")
     if [ "$STATUS" == "inside" ]; then
       echo "📍 Actualmente estás fichado DENTRO."
     elif [ "$STATUS" == "outside" ]; then
@@ -155,7 +124,6 @@ EOF
     read -p "Token de bot: " TG
     read -p "Chat ID: " CHAT
     read -p "Thread ID (opcional): " THREAD
-    # Evitamos duplicados en el archivo de config
     sed -i '/^TG_TOKEN=/d' "$CONFIG_FILE" 2>/dev/null || true
     sed -i '/^TG_CHAT_ID=/d' "$CONFIG_FILE" 2>/dev/null || true
     sed -i '/^TG_THREAD=/d' "$CONFIG_FILE" 2>/dev/null || true
