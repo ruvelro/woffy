@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 CONFIG_FILE="$HOME/.woffy.conf"
 [ ! -f "$CONFIG_FILE" ] && echo "❌ Configuración no encontrada. Ejecuta 'woffy login'" && exit 1
@@ -19,28 +19,62 @@ tg_send() {
   curl "${CURL_ARGS[@]}" > /dev/null || true
 }
 
-# Funciones auxiliares
-interpret_status() {
-  local raw="$1"
-  raw=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | xargs || true)
-  case "$raw" in
-    "true"|"1"|"yes"|"y"|"si"|"sí") printf 'inside' ;;
-    "false"|"0"|"no"|"n") printf 'outside' ;;
-    *) printf 'unknown' ;;
+interpret_status_value() {
+  local v="$1"
+  v=$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]' | xargs || true)
+  case "$v" in
+    "true"|"1"|"yes"|"y"|"si"|"sí") printf "inside" ;;
+    "false"|"0"|"no"|"n") printf "outside" ;;
+    *) printf "unknown" ;;
   esac
 }
 
+# Extrae el SignIn del registro más reciente:
+# - Si body es array: elige max_by(.SignId) si existe, si no max_by(.Date)
+# - Si body es objeto: usa su SignIn
 extract_last_signin() {
   local body="$1"
   if [ -z "$body" ]; then
     printf ''
     return
   fi
-  printf '%s' "$body" | jq -r 'try (
-    if type=="array" then .[-1].SignIn // .[-1].signIn // .[-1].sign_in // empty
-    elif has("data") and (.data|type=="array") then .data[-1].SignIn // .data[-1].signIn // .data[-1].sign_in // empty
-    elif has("SignIn") then .SignIn // .signIn // .sign_in // empty
-    else empty end) catch ""' 2>/dev/null || true
+
+  # jq intenta varias rutas y usa max_by para arrays
+  printf '%s' "$body" | jq -r '
+    try (
+      if type=="array" then
+        ( (map(select(has("SignId")) | .) | if length>0 then max_by(.SignId).SignIn // max_by(.SignId).signIn // max_by(.SignId).sign_in // empty
+           else (map(select(has("Date")) | .) | if length>0 then max_by(.Date).SignIn // max_by(.Date).signIn // max_by(.Date).sign_in // empty else (.[-1].SignIn // .[-1].signIn // .[-1].sign_in // empty) end) end)
+      elif type=="object" then
+        (.SignIn // .signIn // .sign_in // empty)
+      else
+        empty
+      end
+    ) catch ""' 2>/dev/null || true
+}
+
+# Obtener body de /api/signs (intento rápido)
+get_signs_body_once() {
+  curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true
+}
+
+# Reintenta n veces hasta obtener inside/outside (devuelve "inside|raw" o "outside|raw" o "unknown|raw")
+fetch_status_with_retries() {
+  local attempts="${1:-3}"
+  local i=0 body raw_status status
+  while [ $i -lt "$attempts" ]; do
+    body=$(get_signs_body_once)
+    raw_status=$(extract_last_signin "$body" || true)
+    status=$(interpret_status_value "$raw_status")
+    if [ "$status" = "inside" ] || [ "$status" = "outside" ]; then
+      printf '%s|%s' "$status" "$raw_status"
+      return 0
+    fi
+    i=$((i+1))
+    [ $i -lt "$attempts" ] && sleep 1
+  done
+  printf 'unknown|%s' "$raw_status"
+  return 0
 }
 
 clear_woffy_cron() {
@@ -51,31 +85,29 @@ clear_woffy_cron() {
   rm -f "$tmp"
 }
 
-case "$1" in
+case "${1:-help}" in
   in|out)
     CMD="$1"
-    STATUS_RAW=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
-    LAST_SIGNIN=$(extract_last_signin "$STATUS_RAW")
-    STATUS=$(interpret_status "$LAST_SIGNIN")
-
+    # obtener status con reintentos
+    IFS='|' read -r CURRENT_STATUS CURRENT_RAW <<< "$(fetch_status_with_retries 3 || true)"
     ACTION="clock_in"
     [[ "$CMD" == "out" ]] && ACTION="clock_out"
 
-    if [[ "$STATUS" == "inside" && "$CMD" == "in" ]]; then
+    if [[ "$CURRENT_STATUS" == "inside" && "$CMD" == "in" ]]; then
       echo "❌ Ya estás fichado dentro."
       tg_send "❌ Ya estás fichado *dentro*."
       exit 1
-    elif [[ "$STATUS" == "outside" && "$CMD" == "out" ]]; then
+    elif [[ "$CURRENT_STATUS" == "outside" && "$CMD" == "out" ]]; then
       echo "❌ Ya estás fichado fuera."
       tg_send "❌ Ya estás fichado *fuera*."
       exit 1
     fi
 
-    if [ "$STATUS" == "unknown" ]; then
-      echo "⚠️ No se obtuvo un estado claro de la API; se intentará fichar de todos modos (comportamiento conservador similar al original)."
+    if [[ "$CURRENT_STATUS" == "unknown" ]]; then
+      echo "⚠️ No se obtuvo un estado claro de la API tras varios intentos; se intentará fichar de todos modos."
     fi
 
-    # Post del fichaje (capturamos HTTP code y body)
+    # Hacemos el POST y capturamos body+http
     TMP_RESP=$(mktemp)
     HTTP_CODE=$(curl -s -o "$TMP_RESP" -w "%{http_code}" -X POST "$API_URL/api/signs" \
       -H "Authorization: Bearer $TOKEN" \
@@ -85,8 +117,28 @@ case "$1" in
     rm -f "$TMP_RESP"
 
     if [ "${HTTP_CODE:-0}" -ge 200 ] && [ "${HTTP_CODE:-0}" -lt 300 ]; then
-      echo "✅ Fichaje '$CMD' realizado correctamente."
+      echo "✅ Fichaje '$CMD' realizado correctamente (HTTP $HTTP_CODE)."
       tg_send "✅ Fichaje *$CMD* realizado a las *$(date +%H:%M)*."
+
+      # Extraemos SignIn directamente de la respuesta del POST (si existe) y lo mostramos
+      NEW_SIGNIN_RAW=$(printf '%s' "$BODY_POST" | jq -r '.SignIn // .signIn // .sign_in // empty' 2>/dev/null || true)
+      NEW_STATUS=$(interpret_status_value "$NEW_SIGNIN_RAW")
+      if [ "$NEW_STATUS" = "inside" ]; then
+        echo "📍 Estado tras fichaje: DENTRO."
+      elif [ "$NEW_STATUS" = "outside" ]; then
+        echo "📍 Estado tras fichaje: FUERA."
+      else
+        # Si la respuesta del POST no trae SignIn, hacemos una comprobación GET rápida (uno o dos intentos)
+        IFS='|' read -r CONF_STATUS CONF_RAW <<< "$(fetch_status_with_retries 3 || true)"
+        if [ "$CONF_STATUS" = "inside" ]; then
+          echo "📍 Estado tras fichaje: DENTRO."
+        elif [ "$CONF_STATUS" = "outside" ]; then
+          echo "📍 Estado tras fichaje: FUERA."
+        else
+          echo "⚠️ No se pudo confirmar el estado tras el fichaje (API ambigua)."
+          [ -n "$BODY_POST" ] && echo "Respuesta del POST: $(printf '%s' "$BODY_POST" | sed -n '1,10p')"
+        fi
+      fi
     else
       echo "❌ Error al realizar el fichaje (HTTP ${HTTP_CODE:-?}). Respuesta:"
       printf '%s\n' "$BODY_POST"
@@ -95,16 +147,14 @@ case "$1" in
     ;;
 
   status)
-    STATUS_RAW=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" || true)
-    LAST_SIGNIN=$(extract_last_signin "$STATUS_RAW")
-    STATUS=$(interpret_status "$LAST_SIGNIN")
-    if [ "$STATUS" == "inside" ]; then
+    IFS='|' read -r STATUS RAW <<< "$(fetch_status_with_retries 3 || true)"
+    if [ "$STATUS" = "inside" ]; then
       echo "📍 Actualmente estás fichado DENTRO."
-    elif [ "$STATUS" == "outside" ]; then
+    elif [ "$STATUS" = "outside" ]; then
       echo "📍 Actualmente estás fichado FUERA."
     else
-      echo "❓ Estado desconocido. Extracto respuesta API:"
-      printf '%s\n' "$LAST_SIGNIN" | sed -n '1,10p'
+      echo "❓ Estado desconocido. Extracto respuesta API (último intento):"
+      printf '%s\n' "$RAW" | sed -n '1,10p'
     fi
     ;;
 
