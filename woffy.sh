@@ -39,7 +39,7 @@ case "$1" in
     RESPONSE=$(curl -s -X POST "$API_URL/api/signs" \
       -H "Authorization: Bearer $TOKEN" \
       -H "Content-Type: application/json" \
-      -d '{"signType":0,"date":"'"$(date -Iseconds)"'","action":"'"$ACTION"'"}')
+      -d '{"signType":0,"date":"'"$(date -Iseconds)'","action":"'"$ACTION"'"}')
 
     echo "✅ Fichaje '$1' realizado correctamente."
     tg_send "✅ Fichaje *$1* realizado a las *$(date +%H:%M)*."
@@ -90,23 +90,29 @@ case "$1" in
       entrada)
         TIMES=("09:00" "15:30")
         [ -n "$3" ] && TIMES=("$3")
-        (crontab -l 2>/dev/null | grep -v '# woffy-in'; \
+        TMP_CRON=$(mktemp)
+        crontab -l 2>/dev/null | grep -v '# woffy-in' > "$TMP_CRON"
         for T in "${TIMES[@]}"; do
-          MIN=$(echo $T | cut -d: -f2)
-          HOUR=$(echo $T | cut -d: -f1)
-          echo "$MIN $HOUR * * 1-5 woffy in # woffy-in"
-        done) | sort -u | crontab -
+          MIN=$(echo $T | cut -d: -f2 | sed 's/^0*//')
+          HOUR=$(echo $T | cut -d: -f1 | sed 's/^0*//')
+          echo "$MIN $HOUR * * 1-5 woffy in # woffy-in" >> "$TMP_CRON"
+        done
+        sort -u "$TMP_CRON" | crontab -
+        rm "$TMP_CRON"
         echo "✅ Fichajes de entrada programados."
         ;;
       salida)
         TIMES=("14:00" "18:00")
         [ -n "$3" ] && TIMES=("$3")
-        (crontab -l 2>/dev/null | grep -v '# woffy-out'; \
+        TMP_CRON=$(mktemp)
+        crontab -l 2>/dev/null | grep -v '# woffy-out' > "$TMP_CRON"
         for T in "${TIMES[@]}"; do
-          MIN=$(echo $T | cut -d: -f2)
-          HOUR=$(echo $T | cut -d: -f1)
-          echo "$MIN $HOUR * * 1-5 woffy out # woffy-out"
-        done) | sort -u | crontab -
+          MIN=$(echo $T | cut -d: -f2 | sed 's/^0*//')
+          HOUR=$(echo $T | cut -d: -f1 | sed 's/^0*//')
+          echo "$MIN $HOUR * * 1-5 woffy out # woffy-out" >> "$TMP_CRON"
+        done
+        sort -u "$TMP_CRON" | crontab -
+        rm "$TMP_CRON"
         echo "✅ Fichajes de salida programados."
         ;;
       *)
