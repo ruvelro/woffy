@@ -9,6 +9,7 @@ Ideal para automatizar tus jornadas con `cron`, recibir notificaciones por Teleg
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash -s - EMAIL PASSWORD TG_TOKEN TG_CHAT_ID TG_THREAD_ID
 ```
+Si no vas a usar Telegram, los tres parámetros TG_* son opcionales. Puedes activarlo más adelante.
 
 ## ⚙️ Comandos disponibles
 
