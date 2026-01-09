@@ -39,7 +39,7 @@ case "$1" in
     RESPONSE=$(curl -s -X POST "$API_URL/api/signs" \
       -H "Authorization: Bearer $TOKEN" \
       -H "Content-Type: application/json" \
-      -d '{"signType":0,"date":"'"$(date -Iseconds)'","action":"'"$ACTION"'"}')
+      -d '{"signType":0,"date":"'"$(date -Iseconds)"","action":"$ACTION"}')
 
     echo "✅ Fichaje '$1' realizado correctamente."
     tg_send "✅ Fichaje *$1* realizado a las *$(date +%H:%M)*."
