@@ -90,7 +90,7 @@ case "$1" in
       entrada)
         TIMES=("09:00" "15:30")
         [ -n "$3" ] && TIMES=("$3")
-        (crontab -l 2>/dev/null; \
+        (crontab -l 2>/dev/null | grep -v '# woffy-in'; \
         for T in "${TIMES[@]}"; do
           MIN=$(echo $T | cut -d: -f2)
           HOUR=$(echo $T | cut -d: -f1)
@@ -101,7 +101,7 @@ case "$1" in
       salida)
         TIMES=("14:00" "18:00")
         [ -n "$3" ] && TIMES=("$3")
-        (crontab -l 2>/dev/null; \
+        (crontab -l 2>/dev/null | grep -v '# woffy-out'; \
         for T in "${TIMES[@]}"; do
           MIN=$(echo $T | cut -d: -f2)
           HOUR=$(echo $T | cut -d: -f1)
