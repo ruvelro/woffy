@@ -74,6 +74,14 @@ case "$1" in
     echo "✅ Telegram configurado."
     ;;
 
+clear_woffy_cron() {
+  local tmp
+  tmp=$(mktemp)
+  crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+(in|out)/ && !/# woffy-(in|out)/ {print}' > "$tmp" || true
+  crontab "$tmp" || true
+  rm -f "$tmp"
+}
+
   schedule)
     case "${2:-}" in
       list)
