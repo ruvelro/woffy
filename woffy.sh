@@ -73,7 +73,7 @@ case "$1" in
     ;;
 
   telegram)
-    read -p "Token de bot: " TG
+    read -p "Token de bot (sin el 'bot' del principio): " TG
     read -p "Chat ID: " CHAT
     read -p "Thread ID (opcional): " THREAD
     echo "TG_TOKEN=\"$TG\"" >> "$CONFIG_FILE"
