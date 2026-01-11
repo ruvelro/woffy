@@ -239,7 +239,7 @@ case "$1" in
     echo "✅ Telegram configurado."
     tg_send test "✅ Telegram configurado correctamente en woffy"
     log "Telegram configurado"
-
+    ;;
 
   doctor)
   echo "🩺 Diagnóstico woffy v$VERSION"
