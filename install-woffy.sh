@@ -1,56 +1,61 @@
 #!/bin/bash
 set -euo pipefail
 
-# Instalador de woffy — sobrescribe /usr/local/bin/woffy y crea config si se pasan args.
-INSTALL_PATH="/usr/local/bin/woffy"
 REPO_RAW_BASE="https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main"
+INSTALL_DIR="$HOME/.local/bin"
+INSTALL_PATH="$INSTALL_DIR/woffy"
+CONFIG_FILE="$HOME/.woffy.conf"
 
-if [ "$(id -u)" -ne 0 ]; then
-  SUDO=
-  INVOKING_USER="${USER:-$(id -un)}"
-else
-  SUDO=sudo
-  INVOKING_USER="${SUDO_USER:-root}"
-fi
+echo "📦 Instalando woffy en modo usuario (sin sudo)..."
 
-echo "Descargando woffy..."
-$SUDO curl -fsSL "$REPO_RAW_BASE/woffy.sh" -o "$INSTALL_PATH"
-$SUDO chmod +x "$INSTALL_PATH"
-echo "✅ woffy instalado correctamente en $INSTALL_PATH"
+# Crear directorio si no existe
+mkdir -p "$INSTALL_DIR"
 
-# Si se pasan email y password como parámetros, creamos el config en el home del usuario invocante
-if [ -n "${1:-}" ] && [ -n "${2:-}" ]; then
-  EMAIL="$1"
-  PASS="$2"
-  if [ "$INVOKING_USER" = "root" ]; then
-    CFG_PATH="/root/.woffy.conf"
-  else
-    # expandir home del usuario invocante
-    USER_HOME=$(eval echo "~$INVOKING_USER")
-    CFG_PATH="$USER_HOME/.woffy.conf"
+# Descargar binario
+echo "⬇️ Descargando woffy..."
+curl -fsSL "$REPO_RAW_BASE/woffy.sh" -o "$INSTALL_PATH"
+chmod +x "$INSTALL_PATH"
+
+echo "✅ woffy instalado en $INSTALL_PATH"
+
+# Asegurar que ~/.local/bin está en PATH
+if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+  echo "➕ Añadiendo $INSTALL_DIR al PATH"
+
+  SHELL_RC=""
+  if [ -n "${BASH_VERSION:-}" ]; then
+    SHELL_RC="$HOME/.bashrc"
+  elif [ -n "${ZSH_VERSION:-}" ]; then
+    SHELL_RC="$HOME/.zshrc"
   fi
-  cat > /tmp/woffy_conf.$$ <<EOF
-WURL_USER="$EMAIL"
-WURL_PASS="$PASS"
+
+  if [ -n "$SHELL_RC" ]; then
+    echo "" >> "$SHELL_RC"
+    echo "# Añadido por woffy" >> "$SHELL_RC"
+    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_RC"
+    echo "ℹ️ Reinicia la terminal o ejecuta: source $SHELL_RC"
+  else
+    echo "⚠️ No se pudo detectar el shell. Añade manualmente ~/.local/bin al PATH."
+  fi
+fi
+
+# Crear config si se pasan credenciales
+if [ -n "${1:-}" ] && [ -n "${2:-}" ]; then
+  echo "📝 Creando configuración inicial..."
+  cat > "$CONFIG_FILE" <<EOF
+WURL_USER="$1"
+WURL_PASS="$2"
 EOF
-  $SUDO mv /tmp/woffy_conf.$$ "$CFG_PATH"
-  $SUDO chown "$INVOKING_USER":"$INVOKING_USER" "$CFG_PATH" 2>/dev/null || true
-  $SUDO chmod 600 "$CFG_PATH"
-  echo "✅ Configuración creada en $CFG_PATH"
+  chmod 600 "$CONFIG_FILE"
+  echo "✅ Configuración creada en $CONFIG_FILE"
 fi
 
-# Ejecutamos schedule clear + programaciones por defecto COMO el usuario invocante
-echo "Limpiando entradas previas de woffy en crontab..."
-if [ -n "$SUDO" ]; then
-  sudo -u "$INVOKING_USER" "$INSTALL_PATH" schedule clear || true
-  echo "Programando horarios por defecto..."
-  sudo -u "$INVOKING_USER" "$INSTALL_PATH" schedule entrada || true
-  sudo -u "$INVOKING_USER" "$INSTALL_PATH" schedule salida || true
-else
-  "$INSTALL_PATH" schedule clear || true
-  echo "Programando horarios por defecto..."
-  "$INSTALL_PATH" schedule entrada || true
-  "$INSTALL_PATH" schedule salida || true
-fi
+# Programar cron (como usuario)
+echo "🧹 Limpiando entradas previas de woffy en crontab..."
+"$INSTALL_PATH" schedule clear || true
 
-echo "Instalación completa."
+echo "⏱️ Programando horarios por defecto..."
+"$INSTALL_PATH" schedule entrada || true
+"$INSTALL_PATH" schedule salida || true
+
+echo "🎉 Instalación completa. Ejecuta: woffy help"
