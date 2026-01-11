@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="1.1.2-safe"
+VERSION="1.1.3"
 
 get_bin_path() {
   command -v woffy 2>/dev/null || true
@@ -269,30 +269,19 @@ case "$1" in
   read -p "¿Seguro? (y/N): " CONFIRM
   [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && exit 0
 
-  echo "🧹 Eliminando tareas programadas..."
   clear_woffy_cron
-
-  echo "🧹 Eliminando archivos de usuario..."
   rm -f "$CONFIG_FILE" "$TOKEN_FILE" "$LOG_FILE"
 
-  BIN_PATH="$(get_bin_path)"
-
-  if [ -n "$BIN_PATH" ]; then
-    if [ -w "$BIN_PATH" ]; then
-      rm -f "$BIN_PATH"
-    else
-      echo "🔐 Eliminando binario con sudo..."
-      sudo rm -f "$BIN_PATH"
-    fi
-  fi
+  rm -f "$(command -v woffy)"
 
   echo "✅ Woffy desinstalado completamente."
   exit 0
-  ;;
+;;
+
 
 
   update)
-  BIN_PATH="$(get_bin_path)"
+  BIN_PATH="$(command -v woffy)"
   TMP=$(mktemp)
 
   echo "⬇️ Descargando última versión..."
@@ -303,19 +292,11 @@ case "$1" in
   }
 
   chmod +x "$TMP"
+  mv "$TMP" "$BIN_PATH"
 
-  if [ -w "$BIN_PATH" ]; then
-    cp "$TMP" "$BIN_PATH"
-  else
-    echo "🔐 Actualizando binario con sudo..."
-    sudo cp "$TMP" "$BIN_PATH"
-  fi
-
-  rm -f "$TMP"
   echo "✅ Woffy actualizado correctamente."
   exit 0
-  ;;
-
+;;
 
   schedule)
     case "${2:-}" in
