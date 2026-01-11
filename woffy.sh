@@ -1,14 +1,30 @@
 #!/bin/bash
 set -e
 
+VERSION="1.1"
+
 CONFIG_FILE="$HOME/.woffy.conf"
+TOKEN_FILE="$HOME/.woffy.token"
+LOG_FILE="$HOME/.woffy.log"
+API_URL="https://app.woffu.com"
+
 [ ! -f "$CONFIG_FILE" ] && echo "❌ Configuración no encontrada. Ejecuta 'woffy login'" && exit 1
 source "$CONFIG_FILE"
 
+# ─────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
+# ─────────────────────────────────────────────
+# Telegram
+# ─────────────────────────────────────────────
 tg_send() {
   [ -z "${TG_TOKEN:-}" ] && return
 
-  local TYPE="$1"   # error | success
+  local TYPE="$1"
   local MSG="$2"
 
   case "${TG_NOTIFY:-all}" in
@@ -26,9 +42,11 @@ tg_send() {
     > /dev/null
 }
 
+# ─────────────────────────────────────────────
+# Dependencias
+# ─────────────────────────────────────────────
 check_deps() {
   local missing=()
-
   for cmd in curl jq; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
@@ -37,193 +55,192 @@ check_deps() {
     MSG="❌ Faltan dependencias necesarias: ${missing[*]}"
     echo "$MSG"
     echo "Instálalas antes de usar woffy."
-    echo "Ejemplo (Debian/Ubuntu): sudo apt install ${missing[*]}"
-
     tg_send error "$MSG"
     exit 1
   fi
 }
 
-# help no necesita dependencias
 case "$1" in
-  help|"")
-    ;;
-  *)
-    check_deps
-    ;;
+  help|version|"") ;;
+  *) check_deps ;;
 esac
 
-API_URL="https://app.woffu.com"
-TOKEN=$(curl -s -X POST "$API_URL/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS" | jq -r .access_token)
+# ─────────────────────────────────────────────
+# Token OAuth (cacheado)
+# ─────────────────────────────────────────────
+get_token() {
+  local now token exp response expires_in
+  now=$(date +%s)
 
+  if [ -f "$TOKEN_FILE" ]; then
+    source "$TOKEN_FILE"
+    if [ -n "${WOFFY_TOKEN:-}" ] && [ "$now" -lt "${WOFFY_TOKEN_EXP:-0}" ]; then
+      echo "$WOFFY_TOKEN"
+      return
+    fi
+  fi
+
+  log "Renovando token OAuth"
+  response=$(curl -s -X POST "$API_URL/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS")
+
+  token=$(echo "$response" | jq -r '.access_token')
+  expires_in=$(echo "$response" | jq -r '.expires_in')
+
+  if [ -z "$token" ] || [ "$token" = "null" ]; then
+    echo "❌ Error autenticando con Woffu."
+    log "ERROR autenticando: $response"
+    tg_send error "❌ Error autenticando con Woffu."
+    exit 1
+  fi
+
+  exp=$((now + expires_in - 60))
+
+  {
+    echo "WOFFY_TOKEN=\"$token\""
+    echo "WOFFY_TOKEN_EXP=$exp"
+  } > "$TOKEN_FILE"
+
+  chmod 600 "$TOKEN_FILE"
+  log "Token renovado correctamente"
+  echo "$token"
+}
+
+TOKEN=$(get_token)
+
+# ─────────────────────────────────────────────
+# API wrapper
+# ─────────────────────────────────────────────
+api_request() {
+  local method="$1" url="$2" data="${3:-}"
+  local response http body
+
+  if [ -n "$data" ]; then
+    response=$(curl -s -w '\n%{http_code}' -X "$method" "$url" \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "$data")
+  else
+    response=$(curl -s -w '\n%{http_code}' -X "$method" "$url" \
+      -H "Authorization: Bearer $TOKEN")
+  fi
+
+  http=$(echo "$response" | tail -n1)
+  body=$(echo "$response" | sed '$d')
+
+  if [ "$http" = "401" ]; then
+    log "Token inválido, renovando"
+    rm -f "$TOKEN_FILE"
+    TOKEN=$(get_token)
+    api_request "$method" "$url" "$data"
+    return
+  fi
+
+  if [ "$http" -lt 200 ] || [ "$http" -ge 300 ]; then
+    echo "❌ Error de Woffu (HTTP $http)"
+    log "ERROR API $http: $body"
+    tg_send error "❌ Error de Woffu (HTTP $http)"
+    exit 1
+  fi
+
+  echo "$body"
+}
+
+# ─────────────────────────────────────────────
+# Validar día laborable en Woffu
+# ─────────────────────────────────────────────
+check_workday_woffu() {
+  local today resp working desc type
+  today=$(date +%Y-%m-%d)
+
+  resp=$(api_request GET "$API_URL/api/calendar/me?date=$today")
+  working=$(echo "$resp" | jq -r '.workingDay')
+  desc=$(echo "$resp" | jq -r '.description // empty')
+  type=$(echo "$resp" | jq -r '.type // empty')
+
+  if [ "$working" != "true" ]; then
+    echo "❌ Hoy no es un día laborable según Woffu ($desc)"
+    log "Bloqueado fichaje: $type ($desc)"
+    tg_send error "❌ No se ficha hoy: $desc"
+    exit 1
+  fi
+}
+
+# ─────────────────────────────────────────────
+# Cron helpers
+# ─────────────────────────────────────────────
 clear_woffy_cron() {
   local tmp
   tmp=$(mktemp)
   crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+(in|out)/ && !/# woffy-(in|out)/ {print}' > "$tmp" || true
   crontab "$tmp" || true
   rm -f "$tmp"
+  log "Crontab limpiado"
 }
 
+# ─────────────────────────────────────────────
+# Comandos
+# ─────────────────────────────────────────────
 case "$1" in
+  version)
+    echo "woffy v$VERSION"
+    ;;
+
   in|out)
-    STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" | jq -r '.[-1].SignIn')
+    check_workday_woffu
+
+    SIGNS=$(api_request GET "$API_URL/api/signs")
+    STATUS=$(echo "$SIGNS" | jq -r '.[-1].SignIn')
+
     ACTION="clock_in"
-    [[ "$1" == "out" ]] && ACTION="clock_out"
+    [ "$1" = "out" ] && ACTION="clock_out"
 
     if [[ "$STATUS" == "true" && "$1" == "in" ]]; then
       echo "❌ Ya estás fichado dentro."
-      tg_send error "❌ Ya estás fichado *dentro*."
-      exit 1
-    elif [[ "$STATUS" == "false" && "$1" == "out" ]]; then
-      echo "❌ Ya estás fichado fuera."
-      tg_send error "❌ Ya estás fichado *fuera*."
+      tg_send error "❌ Ya estás fichado dentro."
       exit 1
     fi
 
-    RESPONSE=$(curl -s -X POST "$API_URL/api/signs" \
-      -H "Authorization: Bearer $TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{"signType":0,"date":"'"$(date -Iseconds)"'","action":"'"$ACTION"'"}')
+    if [[ "$STATUS" == "false" && "$1" == "out" ]]; then
+      echo "❌ Ya estás fichado fuera."
+      tg_send error "❌ Ya estás fichado fuera."
+      exit 1
+    fi
+
+    api_request POST "$API_URL/api/signs" \
+      '{"signType":0,"date":"'"$(date -Iseconds)"'","action":"'"$ACTION"'"}'
 
     echo "✅ Fichaje '$1' realizado correctamente."
+    log "Fichaje $1 correcto"
     tg_send success "✅ Fichaje *$1* realizado a las *$(date +%H:%M)*."
     ;;
 
   status)
-    STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/api/signs" | jq -r '.[-1].SignIn')
-    if [ "$STATUS" == "true" ]; then
-      echo "📍 Actualmente estás fichado DENTRO."
-    else
-      echo "📍 Actualmente estás fichado FUERA."
-    fi
+    SIGNS=$(api_request GET "$API_URL/api/signs")
+    STATUS=$(echo "$SIGNS" | jq -r '.[-1].SignIn')
+    [ "$STATUS" = "true" ] && echo "📍 Estás fichado DENTRO." || echo "📍 Estás fichado FUERA."
     ;;
 
-  login)
-  read -p "Correo: " EMAIL
-  read -s -p "Contraseña: " PASS
-  echo
-
-  TMP=$(mktemp)
-
-  # Copiar todo excepto WURL_*
-  grep -v '^WURL_' "$CONFIG_FILE" 2>/dev/null > "$TMP" || true
-
-  {
-    echo "WURL_USER=\"$EMAIL\""
-    echo "WURL_PASS=\"$PASS\""
-  } >> "$TMP"
-
-  mv "$TMP" "$CONFIG_FILE"
-  chmod 600 "$CONFIG_FILE"
-
-  echo "✅ Credenciales de Woffu actualizadas."
-  ;;
-
-
-  telegram)
-  read -p "Token de bot (sin 'bot'): " TG
-  read -p "Chat ID: " CHAT
-  read -p "Thread ID (opcional): " THREAD
-  read -p "Notificaciones (errors | success | all) [all]: " NOTIFY
-
-  NOTIFY=${NOTIFY:-all}
-
-  TMP=$(mktemp)
-
-  # Copiar todo excepto TG_*
-  grep -v '^TG_' "$CONFIG_FILE" 2>/dev/null > "$TMP" || true
-
-  {
-    echo "TG_TOKEN=\"$TG\""
-    echo "TG_CHAT_ID=\"$CHAT\""
-    [ -n "$THREAD" ] && echo "TG_THREAD=\"$THREAD\""
-    echo "TG_NOTIFY=\"$NOTIFY\""
-  } >> "$TMP"
-
-  mv "$TMP" "$CONFIG_FILE"
-  chmod 600 "$CONFIG_FILE"
-
-  echo "✅ Telegram configurado (notificaciones: $NOTIFY)."
-  ;;
-
-
-  schedule)
-    case "${2:-}" in
-      list)
-        crontab -l 2>/dev/null | grep -E '# woffy-(in|out)|woffy (in|out)' || echo "(Sin tareas programadas)"
-        ;;
-      pause)
-        CURRENT=$(crontab -l 2>/dev/null || true)
-        if [ -z "$CURRENT" ]; then
-          echo "(No hay tareas para pausar)"
-        else
-          echo "$CURRENT" | sed 's/^/#DISABLED# /' | crontab -
-          echo "⏸️ Tareas programadas pausadas."
-        fi
-        ;;
-      resume)
-        CURRENT=$(crontab -l 2>/dev/null || true)
-        if [ -z "$CURRENT" ]; then
-          echo "(No hay tareas para reactivar)"
-        else
-          echo "$CURRENT" | sed 's/^#DISABLED# //' | crontab -
-          echo "▶️ Tareas programadas reactivadas."
-        fi
-        ;;
-      clear)
-        clear_woffy_cron
-        echo "🧹 Todas las entradas de woffy en crontab han sido eliminadas."
-        ;;
-      entrada)
-        TIMES=("09:00" "15:30")
-        [ -n "${3:-}" ] && TIMES=("$3")
-        TMP_CRON=$(mktemp)
-        crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+in/ && !/# woffy-in/ {print}' > "$TMP_CRON" || true
-        for T in "${TIMES[@]}"; do
-          IFS=':' read -r H M <<< "$T"
-          H=$((10#$H)); M=$((10#$M))
-          echo "$M $H * * 1-5 woffy in # woffy-in" >> "$TMP_CRON"
-        done
-        sort -u "$TMP_CRON" | crontab -
-        rm -f "$TMP_CRON"
-        echo "✅ Fichajes de entrada programados."
-        ;;
-      salida)
-        TIMES=("14:00" "18:00")
-        [ -n "${3:-}" ] && TIMES=("$3")
-        TMP_CRON=$(mktemp)
-        crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+out/ && !/# woffy-out/ {print}' > "$TMP_CRON" || true
-        for T in "${TIMES[@]}"; do
-          IFS=':' read -r H M <<< "$T"
-          H=$((10#$H)); M=$((10#$M))
-          echo "$M $H * * 1-5 woffy out # woffy-out" >> "$TMP_CRON"
-        done
-        sort -u "$TMP_CRON" | crontab -
-        rm -f "$TMP_CRON"
-        echo "✅ Fichajes de salida programados."
-        ;;
-      *)
-        echo "❌ Uso: woffy schedule {list|pause|resume|clear|entrada [HH:MM]|salida [HH:MM]}"
-        exit 1
-        ;;
-    esac
+  doctor)
+    echo "🩺 Diagnóstico woffy v$VERSION"
+    echo "Config: $([ -f "$CONFIG_FILE" ] && echo OK || echo ERROR)"
+    echo "Token:  $([ -f "$TOKEN_FILE" ] && echo OK || echo NO)"
+    echo "API:    $(api_request GET "$API_URL/api/me" >/dev/null 2>&1 && echo OK || echo ERROR)"
+    echo "Log:    $LOG_FILE"
     ;;
 
   help|*)
-    echo "Comandos disponibles:"
-    echo "  in              Fichar entrada"
-    echo "  out             Fichar salida"
-    echo "  status          Consultar estado actual"
-    echo "  login           Reconfigurar credenciales"
-    echo "  telegram        Configurar notificaciones"
-    echo "  schedule        Gestionar programación en cron"
-    echo "      list        Mostrar fichajes programados"
-    echo "      pause       Desactivar tareas"
-    echo "      resume      Activar tareas"
-    echo "      clear       Eliminar todas las entradas de woffy en crontab"
-    echo "      entrada     Añadir tareas de entrada [HH:MM opcional]"
-    echo "      salida      Añadir tareas de salida [HH:MM opcional]"
+    echo "woffy v$VERSION"
+    echo
+    echo "Comandos:"
+    echo "  in           Fichar entrada"
+    echo "  out          Fichar salida"
+    echo "  status       Consultar estado"
+    echo "  doctor       Diagnóstico del sistema"
+    echo "  version      Mostrar versión"
+    echo "  login        Configurar credenciales"
+    echo "  telegram     Configurar Telegram"
+    echo "  schedule     Gestionar cron"
     ;;
 esac
