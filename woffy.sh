@@ -1,16 +1,27 @@
 #!/bin/bash
 set -e
 
+VERSION="1.1-safe"
+
 CONFIG_FILE="$HOME/.woffy.conf"
+TOKEN_FILE="$HOME/.woffy.token"
+LOG_FILE="$HOME/.woffy.log"
+API_URL="https://app.woffu.com"
 
 [ ! -f "$CONFIG_FILE" ] && {
   echo "❌ Configuración no encontrada. Ejecuta 'woffy login'"
   exit 1
 }
 
-# Cargar configuración
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
+
+# ─────────────────────────────────────────────
+# Log pasivo (no rompe nada)
+# ─────────────────────────────────────────────
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || true
+}
 
 # ─────────────────────────────────────────────
 # Telegram
@@ -18,30 +29,29 @@ source "$CONFIG_FILE"
 tg_send() {
   [ -z "${TG_TOKEN:-}" ] && return
 
-  local TYPE="$1"   # error | success
+  local TYPE="$1"   # error | success | test
   local MSG="$2"
 
   case "${TG_NOTIFY:-all}" in
     all) ;;
     errors)  [ "$TYPE" != "error" ] && return ;;
     success) [ "$TYPE" != "success" ] && return ;;
+    test) ;;
     *) ;;
   esac
 
   curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
     -d chat_id="$TG_CHAT_ID" \
     -d text="$MSG" \
-    -d parse_mode="Markdown" \
     ${TG_THREAD:+-d message_thread_id=$TG_THREAD} \
-    > /dev/null
+    > /dev/null || true
 }
 
 # ─────────────────────────────────────────────
-# Dependencias
+# Dependencias (igual que 1.0)
 # ─────────────────────────────────────────────
 check_deps() {
   local missing=()
-
   for cmd in curl jq; do
     command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
   done
@@ -49,8 +59,6 @@ check_deps() {
   if [ "${#missing[@]}" -gt 0 ]; then
     MSG="❌ Faltan dependencias necesarias: ${missing[*]}"
     echo "$MSG"
-    echo "Instálalas antes de usar woffy."
-    echo "Ejemplo (Debian/Ubuntu): sudo apt install ${missing[*]}"
     tg_send error "$MSG"
     exit 1
   fi
@@ -65,15 +73,54 @@ case "$1" in
     ;;
 esac
 
-API_URL="https://app.woffu.com"
+# ─────────────────────────────────────────────
+# Token OAuth (cacheado, fallback al modo 1.0)
+# ─────────────────────────────────────────────
+get_token() {
+  local now response token expires exp
 
-# Obtener token OAuth (SIN CACHE, versión 1.0)
-TOKEN=$(curl -s -X POST "$API_URL/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS" | jq -r .access_token)
+  now=$(date +%s)
+
+  if [ -f "$TOKEN_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$TOKEN_FILE" 2>/dev/null || true
+    if [ -n "${WOFFY_TOKEN:-}" ] && [ "$now" -lt "${WOFFY_TOKEN_EXP:-0}" ]; then
+      echo "$WOFFY_TOKEN"
+      return
+    fi
+  fi
+
+  log "Renovando token OAuth"
+
+  response=$(curl -s -X POST "$API_URL/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&username=$WURL_USER&password=$WURL_PASS")
+
+  token=$(echo "$response" | jq -r .access_token)
+  expires=$(echo "$response" | jq -r '.expires_in // 3600')
+
+  if [ -z "$token" ] || [ "$token" = "null" ]; then
+    log "ERROR autenticando: $response"
+    echo "❌ Error autenticando con Woffu"
+    exit 1
+  fi
+
+  exp=$((now + expires - 60))
+
+  {
+    echo "WOFFY_TOKEN=\"$token\""
+    echo "WOFFY_TOKEN_EXP=$exp"
+  } > "$TOKEN_FILE" 2>/dev/null || true
+
+  chmod 600 "$TOKEN_FILE" 2>/dev/null || true
+  log "Token renovado correctamente"
+  echo "$token"
+}
+
+TOKEN=$(get_token)
 
 # ─────────────────────────────────────────────
-# Cron helpers
+# Cron helpers (idéntico a 1.0)
 # ─────────────────────────────────────────────
 clear_woffy_cron() {
   local tmp
@@ -88,10 +135,16 @@ clear_woffy_cron() {
 }
 
 # ─────────────────────────────────────────────
-# Comandos
+# Comandos (flujo intacto)
 # ─────────────────────────────────────────────
 case "$1" in
+  version)
+    echo "woffy v$VERSION"
+    ;;
+
   in|out)
+    log "Intento de fichaje: $1"
+
     STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" \
       "$API_URL/api/signs" | jq -r '.[-1].SignIn')
 
@@ -100,11 +153,11 @@ case "$1" in
 
     if [[ "$STATUS" == "true" && "$1" == "in" ]]; then
       echo "❌ Ya estás fichado dentro."
-      tg_send error "❌ Ya estás fichado *dentro*."
+      tg_send error "❌ Ya estás fichado dentro."
       exit 1
     elif [[ "$STATUS" == "false" && "$1" == "out" ]]; then
       echo "❌ Ya estás fichado fuera."
-      tg_send error "❌ Ya estás fichado *fuera*."
+      tg_send error "❌ Ya estás fichado fuera."
       exit 1
     fi
 
@@ -116,17 +169,16 @@ case "$1" in
 
     echo "✅ Fichaje '$1' realizado correctamente."
     tg_send success "✅ Fichaje *$1* realizado a las *$(date +%H:%M)*."
+    log "Fichaje $1 OK"
     ;;
 
   status)
     STATUS=$(curl -s -H "Authorization: Bearer $TOKEN" \
       "$API_URL/api/signs" | jq -r '.[-1].SignIn')
 
-    if [ "$STATUS" == "true" ]; then
-      echo "📍 Actualmente estás fichado DENTRO."
-    else
+    [ "$STATUS" == "true" ] && \
+      echo "📍 Actualmente estás fichado DENTRO." || \
       echo "📍 Actualmente estás fichado FUERA."
-    fi
     ;;
 
   login)
@@ -135,8 +187,6 @@ case "$1" in
     echo
 
     TMP=$(mktemp)
-
-    # Copiar todo excepto WURL_*
     grep -v '^WURL_' "$CONFIG_FILE" 2>/dev/null > "$TMP" || true
 
     {
@@ -146,11 +196,19 @@ case "$1" in
 
     mv "$TMP" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
+    rm -f "$TOKEN_FILE" 2>/dev/null || true
 
     echo "✅ Credenciales de Woffu actualizadas."
+    log "Credenciales actualizadas"
     ;;
 
   telegram)
+    if [ "${2:-}" = "test" ]; then
+      tg_send test "✅ Mensaje de prueba de woffy"
+      echo "📨 Mensaje de prueba enviado."
+      exit 0
+    fi
+
     read -p "Token de bot (sin 'bot'): " TG
     read -p "Chat ID: " CHAT
     read -p "Thread ID (opcional): " THREAD
@@ -158,8 +216,6 @@ case "$1" in
     NOTIFY=${NOTIFY:-all}
 
     TMP=$(mktemp)
-
-    # Copiar todo excepto TG_*
     grep -v '^TG_' "$CONFIG_FILE" 2>/dev/null > "$TMP" || true
 
     {
@@ -172,96 +228,76 @@ case "$1" in
     mv "$TMP" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
-    echo "✅ Telegram configurado (notificaciones: $NOTIFY)."
+    echo "✅ Telegram configurado."
+    log "Telegram configurado"
+    ;;
+
+  doctor)
+    echo "🩺 Diagnóstico woffy v$VERSION"
+    echo "Config:  OK"
+    echo "Token:   $([ -f "$TOKEN_FILE" ] && echo OK || echo NO)"
+    echo "Log:     $LOG_FILE"
+    echo "Deps:    $(command -v curl >/dev/null && command -v jq >/dev/null && echo OK || echo ERROR)"
+    echo "Cron:    $(crontab -l 2>/dev/null | grep -c 'woffy ') entradas"
     ;;
 
   schedule)
     case "${2:-}" in
       list)
-        crontab -l 2>/dev/null | \
-          grep -E '# woffy-(in|out)|woffy (in|out)' || \
-          echo "(Sin tareas programadas)"
+        crontab -l 2>/dev/null | grep -E '# woffy-(in|out)|woffy (in|out)' || echo "(Sin tareas)"
         ;;
-
       pause)
-        CURRENT=$(crontab -l 2>/dev/null || true)
-        if [ -z "$CURRENT" ]; then
-          echo "(No hay tareas para pausar)"
-        else
-          echo "$CURRENT" | sed 's/^/#DISABLED# /' | crontab -
-          echo "⏸️ Tareas programadas pausadas."
-        fi
+        crontab -l 2>/dev/null | sed 's/^/#DISABLED# /' | crontab -
+        echo "⏸️ Tareas pausadas."
         ;;
-
       resume)
-        CURRENT=$(crontab -l 2>/dev/null || true)
-        if [ -z "$CURRENT" ]; then
-          echo "(No hay tareas para reactivar)"
-        else
-          echo "$CURRENT" | sed 's/^#DISABLED# //' | crontab -
-          echo "▶️ Tareas programadas reactivadas."
-        fi
+        crontab -l 2>/dev/null | sed 's/^#DISABLED# //' | crontab -
+        echo "▶️ Tareas reactivadas."
         ;;
-
       clear)
         clear_woffy_cron
-        echo "🧹 Todas las entradas de woffy en crontab han sido eliminadas."
+        echo "🧹 Crontab limpiado."
         ;;
-
       entrada)
         TIMES=("09:00" "15:30")
         [ -n "${3:-}" ] && TIMES=("$3")
-
-        TMP_CRON=$(mktemp)
-        crontab -l 2>/dev/null | \
-          awk '!/woffy[[:space:]]+in/ && !/# woffy-in/ {print}' \
-          > "$TMP_CRON" || true
-
+        TMP=$(mktemp)
+        crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+in/ {print}' > "$TMP" || true
         for T in "${TIMES[@]}"; do
           IFS=':' read -r H M <<< "$T"
-          H=$((10#$H)); M=$((10#$M))
-          echo "$M $H * * 1-5 woffy in # woffy-in" >> "$TMP_CRON"
+          echo "$M $H * * 1-5 woffy in # woffy-in" >> "$TMP"
         done
-
-        sort -u "$TMP_CRON" | crontab -
-        rm -f "$TMP_CRON"
-        echo "✅ Fichajes de entrada programados."
+        crontab "$TMP"
+        rm -f "$TMP"
+        echo "✅ Entradas programadas."
         ;;
-
       salida)
         TIMES=("14:00" "18:00")
         [ -n "${3:-}" ] && TIMES=("$3")
-
-        TMP_CRON=$(mktemp)
-        crontab -l 2>/dev/null | \
-          awk '!/woffy[[:space:]]+out/ && !/# woffy-out/ {print}' \
-          > "$TMP_CRON" || true
-
+        TMP=$(mktemp)
+        crontab -l 2>/dev/null | awk '!/woffy[[:space:]]+out/ {print}' > "$TMP" || true
         for T in "${TIMES[@]}"; do
           IFS=':' read -r H M <<< "$T"
-          H=$((10#$H)); M=$((10#$M))
-          echo "$M $H * * 1-5 woffy out # woffy-out" >> "$TMP_CRON"
+          echo "$M $H * * 1-5 woffy out # woffy-out" >> "$TMP"
         done
-
-        sort -u "$TMP_CRON" | crontab -
-        rm -f "$TMP_CRON"
-        echo "✅ Fichajes de salida programados."
-        ;;
-
-      *)
-        echo "❌ Uso: woffy schedule {list|pause|resume|clear|entrada [HH:MM]|salida [HH:MM]}"
-        exit 1
+        crontab "$TMP"
+        rm -f "$TMP"
+        echo "✅ Salidas programadas."
         ;;
     esac
     ;;
 
   help|*)
-    echo "Comandos disponibles:"
-    echo "  in              Fichar entrada"
-    echo "  out             Fichar salida"
-    echo "  status          Consultar estado actual"
-    echo "  login           Reconfigurar credenciales"
-    echo "  telegram        Configurar notificaciones"
-    echo "  schedule        Gestionar programación en cron"
+    echo "woffy v$VERSION"
+    echo
+    echo "Comandos:"
+    echo "  in | out        Fichar"
+    echo "  status          Ver estado"
+    echo "  login           Configurar credenciales"
+    echo "  telegram        Configurar Telegram"
+    echo "  telegram test   Enviar mensaje de prueba"
+    echo "  schedule        Programación en cron"
+    echo "  doctor          Diagnóstico"
+    echo "  version         Mostrar versión"
     ;;
 esac
