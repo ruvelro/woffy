@@ -1,61 +1,189 @@
-# woffy – fichajes Woffu desde terminal
+# woffy — fichajes Woffu desde terminal (sin sudo)
 
-**woffy** es una utilidad de terminal para fichar entrada y salida en Woffu usando `curl`, sin API key, sin navegador y sin aplicaciones oficiales.
+**woffy** es una utilidad de línea de comandos para fichar **entrada** y **salida** en Woffu directamente desde la terminal, sin navegador y sin apps oficiales.
 
-Ideal para automatizar tus jornadas con `cron`, recibir notificaciones por Telegram y controlar tu estado sin abrir el portal.
+Está pensada para:
+- fichar rápido con `woffy in` / `woffy out`
+- automatizar fichajes con `cron`
+- recibir notificaciones por Telegram (opcional)
+- funcionar **sin sudo**, solo con privilegios de usuario
 
-## 🚀 Instalación rápida
+---
+
+## ✅ Instalación (modo usuario)
+
+Instala woffy en `~/.local/bin` y añade el PATH si es necesario.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash -s - EMAIL PASSWORD [TG_TOKEN TG_CHAT_ID TG_THREAD_ID]
+curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash
 ```
-Si no vas a usar Telegram, los tres parámetros TG_* son opcionales. Puedes activarlo más adelante.
 
-## ⚙️ Comandos disponibles
+Con credenciales iniciales:
 
-| Comando                         | Descripción                                                                 |
-|--------------------------------|-----------------------------------------------------------------------------|
-| `woffy in`                     | Ficha la entrada. Si ya estás dentro, muestra error.                        |
-| `woffy out`                    | Ficha la salida. Si no habías fichado antes, muestra error.                 |
-| `woffy status`                 | Muestra el estado de fichajes del día actual (entrada/salida).             |
-| `woffy login`                  | Cambia el email y la contraseña de acceso a Woffu (modo interactivo).      |
-| `woffy telegram`               | Configura el bot de Telegram (token, chat ID, thread ID).                  |
-| `woffy help`                   | Muestra esta ayuda básica de uso.                                          |
+```bash
+curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash -s - "EMAIL" "PASSWORD"
+```
 
-### ⏰ Gestión de horarios (cron)
+Si Bash sigue apuntando a una ruta antigua:
 
-| Comando                                     | Descripción                                                                    |
-|--------------------------------------------|--------------------------------------------------------------------------------|
-| `woffy schedule list`                      | Muestra las tareas programadas (entradas/salidas automáticas).                |
-| `woffy schedule pause`                     | Pausa las tareas automáticas sin eliminarlas (comentando en `crontab`).       |
-| `woffy schedule resume`                    | Reactiva las tareas pausadas.                                                 |
-| `woffy schedule entrada add HH:MM`         | Añade un fichaje automático de entrada a esa hora.                            |
-| `woffy schedule salida add HH:MM`          | Añade un fichaje automático de salida a esa hora.                             |
+---
 
-> 🧠 **Nota:** los horarios deben indicarse en formato `HH:MM` (24h), y se programan solo de **lunes a viernes**.
+## ⚙️ Configuración
 
+### Archivo de configuración
 
-## 🕘 Horarios por defecto
+`~/.woffy.conf`
 
-Entrada: 09:00 y 15:30  
-Salida : 14:00 y 18:00 (L-V)
+```bash
+WURL_USER="tu@email.com"
+WURL_PASS="tu_password"
+```
 
-## 🔐 Configuración (`~/.woffy.conf`)
+Permisos: `600`.
 
-WURL_USER=usuario@empresa.com  
-WURL_PASS=contraseña  
-TG_BOT_TOKEN=opcional  
-TG_CHAT_ID=opcional  
-TG_THREAD_ID=opcional  
-TG_NOTIFY=errors | success | all
+### Telegram (opcional)
+
+```bash
+woffy telegram
+woffy telegram test
+```
+
+Variables guardadas:
+
+```bash
+TG_TOKEN="..."
+TG_CHAT_ID="..."
+TG_THREAD="..."   # opcional
+TG_NOTIFY="all"   # all | errors | success
+```
+
+---
+
+## 🔐 Seguridad
+
+- Config y token con permisos `600`
+- Token OAuth cacheado en `~/.woffy.token`
+- Logs en `~/.woffy.log`
+
+---
+
+## 🧠 Funcionamiento interno
+
+1. Autenticación OAuth contra Woffu (`/token`)
+2. Cacheo del token local
+3. Uso de `https://app.woffu.com/api/signs`
+4. Notificaciones Telegram según configuración
+
+---
+
+## 🧾 Comandos
+
+| Comando | Descripción |
+|------|-----------|
+| `woffy in` | Ficha entrada |
+| `woffy out` | Ficha salida |
+| `woffy status` | Estado actual |
+| `woffy login` | Cambiar credenciales |
+| `woffy telegram` | Configurar Telegram |
+| `woffy telegram test` | Test Telegram |
+| `woffy doctor` | Diagnóstico + test TG |
+| `woffy update` | Actualiza binario |
+| `woffy uninstall` | Desinstala todo |
+| `woffy version` | Versión |
+| `woffy help` | Ayuda completa |
+
+---
+
+## ⏰ Cron / schedule
+
+Listar:
+
+```bash
+woffy schedule list
+```
+
+Limpiar solo woffy:
+
+```bash
+woffy schedule clear
+```
+
+Pausar / reanudar SOLO woffy:
+
+```bash
+woffy schedule pause
+woffy schedule resume
+```
+
+Entradas:
+
+```bash
+woffy schedule entrada
+woffy schedule entrada 09:00
+```
+
+Salidas:
+
+```bash
+woffy schedule salida
+woffy schedule salida 18:00
+```
+
+---
+
+## 🩺 Diagnóstico
+
+```bash
+woffy doctor
+```
+
+Muestra:
+- config
+- token
+- dependencias
+- cron
+- Telegram (envía test si está configurado)
+
+---
+
+## 🧹 Desinstalar
+
+```bash
+woffy uninstall
+```
+
+Elimina:
+- binario
+- config
+- token
+- log
+- cron de woffy
+
+---
+
+## 🧹 Actualizar
+
+```bash
+woffy update
+```
+
+Actualiza:
+- binario
+  
+Mantiene:
+- config
+- token
+- log
+- cron de woffy
+
+---
 
 ## 📌 Pendientes
 
-- Validación de hora HH:MM
-- Modo no interactivo para login/telegram
-- Soporte perfiles múltiples
-- Rotación de logs
+- No fichar en vacaciones/descansos/festivos
+- validación estricta de horas
+- lockfile cron/manual
 
-## 📝 Licencia
+---
 
-MIT
+GNU GPL v3 License
