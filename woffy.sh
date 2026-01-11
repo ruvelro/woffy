@@ -1,13 +1,16 @@
 #!/bin/bash
 set -e
 
-VERSION="1.1-safe"
+VERSION="1.1.1-safe"
 
 CONFIG_FILE="$HOME/.woffy.conf"
 TOKEN_FILE="$HOME/.woffy.token"
 LOG_FILE="$HOME/.woffy.log"
 API_URL="https://app.woffu.com"
 
+# ─────────────────────────────────────────────
+# Base
+# ─────────────────────────────────────────────
 [ ! -f "$CONFIG_FILE" ] && {
   echo "❌ Configuración no encontrada. Ejecuta 'woffy login'"
   exit 1
@@ -28,6 +31,7 @@ log() {
 # ─────────────────────────────────────────────
 tg_send() {
   [ -z "${TG_TOKEN:-}" ] && return
+  [ -z "${TG_CHAT_ID:-}" ] && return
 
   local TYPE="$1"   # error | success | test
   local MSG="$2"
@@ -74,7 +78,7 @@ case "$1" in
 esac
 
 # ─────────────────────────────────────────────
-# Token OAuth (cacheado, fallback al modo 1.0)
+# Token OAuth (cacheado, fallback seguro)
 # ─────────────────────────────────────────────
 get_token() {
   local now response token expires exp
@@ -135,7 +139,7 @@ clear_woffy_cron() {
 }
 
 # ─────────────────────────────────────────────
-# Comandos (flujo intacto)
+# Comandos
 # ─────────────────────────────────────────────
 case "$1" in
   version)
@@ -229,16 +233,68 @@ case "$1" in
     chmod 600 "$CONFIG_FILE"
 
     echo "✅ Telegram configurado."
+    tg_send test "✅ Telegram configurado correctamente en woffy"
     log "Telegram configurado"
     ;;
 
   doctor)
-    echo "🩺 Diagnóstico woffy v$VERSION"
-    echo "Config:  OK"
-    echo "Token:   $([ -f "$TOKEN_FILE" ] && echo OK || echo NO)"
-    echo "Log:     $LOG_FILE"
-    echo "Deps:    $(command -v curl >/dev/null && command -v jq >/dev/null && echo OK || echo ERROR)"
-    echo "Cron:    $(crontab -l 2>/dev/null | grep -c 'woffy ') entradas"
+  echo "🩺 Diagnóstico woffy v$VERSION"
+  echo "Config:  OK"
+  echo "Token:   $([ -f "$TOKEN_FILE" ] && echo OK || echo NO)"
+  echo "Log:     $LOG_FILE"
+  echo "Deps:    $(command -v curl >/dev/null && command -v jq >/dev/null && echo OK || echo ERROR)"
+  echo "Cron:    $(crontab -l 2>/dev/null | grep -c 'woffy ') entradas"
+
+  # Telegram
+  if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
+    echo -n "TG:      Configurado"
+
+    # test pasivo (no envía mensaje visible)
+    TG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+      "https://api.telegram.org/bot$TG_TOKEN/getMe")
+
+    if [ "$TG_STATUS" = "200" ]; then
+      echo " (API OK)"
+    else
+      echo " (API ERROR)"
+    fi
+  else
+    echo "TG:      NO configurado"
+  fi
+  ;;
+
+
+  uninstall)
+    echo "⚠️ Esto eliminará completamente woffy."
+    read -p "¿Seguro? (y/N): " CONFIRM
+    [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && exit 0
+
+    clear_woffy_cron
+    rm -f "$CONFIG_FILE" "$TOKEN_FILE" "$LOG_FILE"
+
+    BIN_PATH="$(which woffy 2>/dev/null || true)"
+    [ -n "$BIN_PATH" ] && rm -f "$BIN_PATH"
+
+    echo "✅ Woffy desinstalado completamente."
+    exit 0
+    ;;
+
+  update)
+    BIN_PATH="$(which woffy)"
+    TMP=$(mktemp)
+
+    echo "⬇️ Descargando última versión..."
+    curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/main/woffy.sh -o "$TMP" || {
+      echo "❌ Error descargando actualización"
+      exit 1
+    }
+
+    chmod +x "$TMP"
+    cp "$TMP" "$BIN_PATH"
+    rm -f "$TMP"
+
+    echo "✅ Woffy actualizado correctamente."
+    exit 0
     ;;
 
   schedule)
@@ -298,6 +354,8 @@ case "$1" in
     echo "  telegram test   Enviar mensaje de prueba"
     echo "  schedule        Programación en cron"
     echo "  doctor          Diagnóstico"
+    echo "  update          Actualizar woffy"
+    echo "  uninstall       Desinstalar completamente"
     echo "  version         Mostrar versión"
     ;;
 esac
