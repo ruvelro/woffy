@@ -1,7 +1,11 @@
 #!/bin/bash
 set -e
 
-VERSION="1.1.1-safe"
+VERSION="1.1.2-safe"
+
+get_bin_path() {
+  command -v woffy 2>/dev/null || true
+}
 
 CONFIG_FILE="$HOME/.woffy.conf"
 TOKEN_FILE="$HOME/.woffy.token"
@@ -261,37 +265,57 @@ case "$1" in
 
 
   uninstall)
-    echo "⚠️ Esto eliminará completamente woffy."
-    read -p "¿Seguro? (y/N): " CONFIRM
-    [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && exit 0
+  echo "⚠️ Esto eliminará completamente woffy."
+  read -p "¿Seguro? (y/N): " CONFIRM
+  [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && exit 0
 
-    clear_woffy_cron
-    rm -f "$CONFIG_FILE" "$TOKEN_FILE" "$LOG_FILE"
+  echo "🧹 Eliminando tareas programadas..."
+  clear_woffy_cron
 
-    BIN_PATH="$(which woffy 2>/dev/null || true)"
-    [ -n "$BIN_PATH" ] && rm -f "$BIN_PATH"
+  echo "🧹 Eliminando archivos de usuario..."
+  rm -f "$CONFIG_FILE" "$TOKEN_FILE" "$LOG_FILE"
 
-    echo "✅ Woffy desinstalado completamente."
-    exit 0
-    ;;
+  BIN_PATH="$(get_bin_path)"
+
+  if [ -n "$BIN_PATH" ]; then
+    if [ -w "$BIN_PATH" ]; then
+      rm -f "$BIN_PATH"
+    else
+      echo "🔐 Eliminando binario con sudo..."
+      sudo rm -f "$BIN_PATH"
+    fi
+  fi
+
+  echo "✅ Woffy desinstalado completamente."
+  exit 0
+  ;;
+
 
   update)
-    BIN_PATH="$(which woffy)"
-    TMP=$(mktemp)
+  BIN_PATH="$(get_bin_path)"
+  TMP=$(mktemp)
 
-    echo "⬇️ Descargando última versión..."
-    curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/main/woffy.sh -o "$TMP" || {
-      echo "❌ Error descargando actualización"
-      exit 1
-    }
-
-    chmod +x "$TMP"
-    cp "$TMP" "$BIN_PATH"
+  echo "⬇️ Descargando última versión..."
+  curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/main/woffy.sh -o "$TMP" || {
+    echo "❌ Error descargando actualización"
     rm -f "$TMP"
+    exit 1
+  }
 
-    echo "✅ Woffy actualizado correctamente."
-    exit 0
-    ;;
+  chmod +x "$TMP"
+
+  if [ -w "$BIN_PATH" ]; then
+    cp "$TMP" "$BIN_PATH"
+  else
+    echo "🔐 Actualizando binario con sudo..."
+    sudo cp "$TMP" "$BIN_PATH"
+  fi
+
+  rm -f "$TMP"
+  echo "✅ Woffy actualizado correctamente."
+  exit 0
+  ;;
+
 
   schedule)
     case "${2:-}" in
