@@ -151,21 +151,24 @@ api_request() {
 # Validar día laborable en Woffu
 # ─────────────────────────────────────────────
 check_workday_woffu() {
-  local today resp working desc type
+  local today resp working desc
+
   today=$(date +%Y-%m-%d)
 
-  resp=$(api_request GET "$API_URL/api/calendar/me?date=$today")
-  working=$(echo "$resp" | jq -r '.workingDay')
-  desc=$(echo "$resp" | jq -r '.description // empty')
-  type=$(echo "$resp" | jq -r '.type // empty')
+  resp=$(api_request GET "$API_URL/api/calendar/me?date=$today" || true)
 
-  if [ "$working" != "true" ]; then
+  # Si no hay respuesta clara, no bloqueamos
+  working=$(echo "$resp" | jq -r '.workingDay // empty' 2>/dev/null || true)
+
+  if [ "$working" = "false" ]; then
+    desc=$(echo "$resp" | jq -r '.description // "día no laborable"' 2>/dev/null)
     echo "❌ Hoy no es un día laborable según Woffu ($desc)"
-    log "Bloqueado fichaje: $type ($desc)"
+    log "Bloqueado fichaje por calendario: $desc"
     tg_send error "❌ No se ficha hoy: $desc"
     exit 1
   fi
 }
+
 
 # ─────────────────────────────────────────────
 # Cron helpers
@@ -188,6 +191,7 @@ case "$1" in
     ;;
 
   in|out)
+    log "Intento de fichaje: $1"
     check_workday_woffu
 
     SIGNS=$(api_request GET "$API_URL/api/signs")
@@ -226,7 +230,11 @@ case "$1" in
     echo "🩺 Diagnóstico woffy v$VERSION"
     echo "Config: $([ -f "$CONFIG_FILE" ] && echo OK || echo ERROR)"
     echo "Token:  $([ -f "$TOKEN_FILE" ] && echo OK || echo NO)"
-    echo "API:    $(api_request GET "$API_URL/api/me" >/dev/null 2>&1 && echo OK || echo ERROR)"
+    if api_request GET "$API_URL/api/me" >/dev/null 2>&1; then
+    echo "API:    OK"
+      else
+    echo "API:    ERROR"
+      fi
     echo "Log:    $LOG_FILE"
     ;;
 
