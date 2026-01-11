@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="1.1.3"
+VERSION="1.1.4"
 
 get_bin_path() {
   command -v woffy 2>/dev/null || true
@@ -304,12 +304,22 @@ case "$1" in
         crontab -l 2>/dev/null | grep -E '# woffy-(in|out)|woffy (in|out)' || echo "(Sin tareas)"
         ;;
       pause)
-        crontab -l 2>/dev/null | sed 's/^/#DISABLED# /' | crontab -
-        echo "⏸️ Tareas pausadas."
+        TMP=$(mktemp)
+        crontab -l 2>/dev/null | \
+          sed '/woffy[[:space:]]\+\(in\|out\)/ s/^/#DISABLED-WOFFY# /' \
+          > "$TMP" || true
+        crontab "$TMP"
+        rm -f "$TMP"
+        echo "⏸️ Tareas de woffy pausadas."
         ;;
       resume)
-        crontab -l 2>/dev/null | sed 's/^#DISABLED# //' | crontab -
-        echo "▶️ Tareas reactivadas."
+        TMP=$(mktemp)
+        crontab -l 2>/dev/null | \
+          sed 's/^#DISABLED-WOFFY# //' \
+          > "$TMP" || true
+        crontab "$TMP"
+        rm -f "$TMP"
+        echo "▶️ Tareas de woffy reactivadas."
         ;;
       clear)
         clear_woffy_cron
@@ -345,18 +355,68 @@ case "$1" in
     ;;
 
   help|*)
-    echo "woffy v$VERSION"
-    echo
-    echo "Comandos:"
-    echo "  in | out        Fichar"
-    echo "  status          Ver estado"
-    echo "  login           Configurar credenciales"
-    echo "  telegram        Configurar Telegram"
-    echo "  telegram test   Enviar mensaje de prueba"
-    echo "  schedule        Programación en cron"
-    echo "  doctor          Diagnóstico"
-    echo "  update          Actualizar woffy"
-    echo "  uninstall       Desinstalar completamente"
-    echo "  version         Mostrar versión"
-    ;;
+  cat <<EOF
+woffy v$VERSION
+
+Uso:
+  woffy <comando> [subcomando] [opciones]
+
+Comandos principales:
+  in                Ficha entrada. Si ya estás dentro, falla con error.
+  out               Ficha salida. Si ya estás fuera, falla con error.
+  status            Muestra si estás fichado DENTRO o FUERA (según el último signo).
+  login             Configura credenciales de Woffu (interactivo). Limpia WURL_* antiguos.
+  telegram          Configura Telegram (interactivo). Limpia TG_* antiguos.
+  telegram test     Envía un mensaje de prueba a Telegram (si está configurado).
+  schedule          Gestiona la programación en cron (entradas/salidas automáticas).
+  doctor            Diagnóstico local + test de Telegram (envía mensaje si TG está configurado).
+  update            Actualiza woffy (solo reemplaza el binario; no toca tu config).
+  uninstall         Desinstala woffy (borra binario, config, token, logs y cron).
+  version           Muestra la versión.
+
+Schedule (cron):
+  woffy schedule list
+      Lista entradas relacionadas con woffy en tu crontab.
+
+  woffy schedule pause
+      Pausa TODAS las líneas actuales del crontab (prefijo #DISABLED#).
+      Nota: afecta al crontab completo, no solo a woffy.
+
+  woffy schedule resume
+      Reactiva las líneas pausadas (quita #DISABLED#).
+
+  woffy schedule clear
+      Elimina SOLO las líneas de woffy in/out de tu crontab.
+
+  woffy schedule entrada [HH:MM]
+      Programa fichajes de entrada (L-V).
+      - Sin hora: usa valores por defecto del script (p.ej. 09:00 y 15:30).
+      - Con hora: reemplaza/añade esa hora (formato 24h, HH:MM).
+
+  woffy schedule salida [HH:MM]
+      Programa fichajes de salida (L-V).
+      - Sin hora: usa valores por defecto del script (p.ej. 14:00 y 18:00).
+      - Con hora: reemplaza/añade esa hora (formato 24h, HH:MM).
+
+Telegram:
+  woffy telegram
+      Te pedirá:
+        - Token del bot (sin 'bot' delante)
+        - Chat ID
+        - Thread ID (opcional)
+        - Notificaciones: errors | success | all
+      Al finalizar, envía un mensaje de prueba.
+
+Archivos que usa woffy:
+  Config:   ~/.woffy.conf
+  Token:    ~/.woffy.token
+  Log:      ~/.woffy.log
+
+Notas:
+  - El token OAuth se cachea en ~/.woffy.token para evitar pedirlo en cada ejecución.
+  - Si acabas de reinstalar y Bash sigue apuntando a una ruta antigua:
+      hash -r
+
+EOF
+  ;;
 esac
