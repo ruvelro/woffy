@@ -231,11 +231,15 @@ case "$1" in
 
     mv "$TMP" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
-
+    
+    # Recargar configuración para que tg_send use los nuevos valores
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+    
     echo "✅ Telegram configurado."
     tg_send test "✅ Telegram configurado correctamente en woffy"
     log "Telegram configurado"
-    ;;
+
 
   doctor)
   echo "🩺 Diagnóstico woffy v$VERSION"
@@ -247,21 +251,13 @@ case "$1" in
 
   # Telegram
   if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
-    echo -n "TG:      Configurado"
-
-    # test pasivo (no envía mensaje visible)
-    TG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-      "https://api.telegram.org/bot$TG_TOKEN/getMe")
-
-    if [ "$TG_STATUS" = "200" ]; then
-      echo " (API OK)"
-    else
-      echo " (API ERROR)"
-    fi
+    echo "TG:      Configurado (enviando test...)"
+    tg_send test "🩺 Woffy doctor: Telegram funciona correctamente"
   else
     echo "TG:      NO configurado"
   fi
   ;;
+
 
 
   uninstall)
