@@ -1,4 +1,4 @@
-# woffy — fichajes Woffu desde terminal (sin sudo)
+# woffy — fichajes Woffu desde terminal con curl
 
 **woffy** es una utilidad de línea de comandos para fichar **entrada** y **salida** en Woffu directamente desde la terminal, sin navegador y sin apps oficiales.
 
