@@ -178,11 +178,52 @@ Mantiene:
 
 ---
 
-## 📌 Pendientes
+## 📌 Woffing in CURL
 
-- No fichar en vacaciones/descansos/festivos
-- validación estricta de horas
-- lockfile cron/manual
+¿Eres como mi amigo @edkalrio y quieres lo más mínimamente minimalista posible? Basta con que programes las llamadas a la API a mano.  
+
+El endpoint para el token de la API es: POST https://app.woffu.com/token
+
+Y para llamarlo, basta con lanzar:
+
+```bash
+curl -X POST "https://app.woffu.com/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "grant_type=password" \
+  --data-urlencode "username=TU_EMAIL" \
+  --data-urlencode "password=TU_PASSWORD"
+```
+
+La respuesta esperada será: 
+
+```bash
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6...",
+  "expires_in": 3600,
+  "token_type": "bearer"
+}
+```
+Ahora, con el "access_token" en mano, basta con llamar al endpoint de fichaje, POST https://app.woffu.com/api/signs
+
+```bash
+curl -X POST "https://app.woffu.com/api/signs" \
+  -H "Authorization: Bearer TU_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "signType": 0,
+    "action": "clock_in"
+  }'
+```
+```bash
+curl -X POST "https://app.woffu.com/api/signs" \
+  -H "Authorization: Bearer TU_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "signType": 0,
+    "action": "clock_out"
+  }'
+```
+Este método (que llamaremos woffy_lite) no comprueba si estás dentro o fuera antes de fichar. Tampoco si es festivo, vacaciones o descanso. No ofrece ningún control. Pero es lo más simple y puro si lo que queremos es "fichar y olvidarnos". 
 
 ---
 
