@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 set -euo pipefail
 
 VERSION="1.0.1"
@@ -21,7 +21,7 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || t
 check_deps() {
   for cmd in "$@"; do
     command -v "$cmd" >/dev/null 2>&1 || {
-      echo "ERROR: Falta dependencia critica: $cmd"
+      echo "❌ Falta dependencia crítica: $cmd"
       exit 1
     }
   done
@@ -51,10 +51,10 @@ acquire_lock() {
     local pid
     pid="$(cat "$LOCK_FILE" 2>/dev/null || echo "")"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      log "Lock activo (PID $pid). Abortando ejecucin concurrente."
+      log "Lock activo (PID $pid). Abortando ejecución concurrente."
       exit 0
     else
-      log "Lock hurfano. Eliminando lock."
+      log "Lock huérfano. Eliminando lock."
       rm -f "$LOCK_FILE"
     fi
   fi
@@ -67,7 +67,7 @@ acquire_lock() {
   local dir_pid
   dir_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")"
   if [ -n "$dir_pid" ] && kill -0 "$dir_pid" 2>/dev/null; then
-    log "Lock activo (PID $dir_pid). Abortando ejecucion concurrente."
+    log "Lock activo (PID $dir_pid). Abortando ejecución concurrente."
     exit 0
   fi
 
@@ -78,7 +78,7 @@ acquire_lock() {
     return
   fi
 
-  log "No se pudo adquirir lock atomico."
+  log "No se pudo adquirir lock atómico."
   exit 1
 }
 
@@ -117,7 +117,7 @@ case "${1:-}" in
 esac
 
 if $need_config; then
-  [ ! -f "$CONFIG_FILE" ] && { echo "ERROR: Configuracion no encontrada. Ejecuta 'woffy login'"; exit 1; }
+  [ ! -f "$CONFIG_FILE" ] && { echo "❌ Configuración no encontrada. Ejecuta 'woffy login'"; exit 1; }
   # shellcheck disable=SC1090
   source "$CONFIG_FILE"
 fi
@@ -152,8 +152,8 @@ get_token() {
 
   if [ -z "$token" ] || [ "$token" = "null" ]; then
     log "ERROR API Auth: $response"
-    echo " Error autenticando con Woffu"
-    tg_send error " woffy: Credenciales invlidas o error de API."
+    echo "❌ Error autenticando con Woffu"
+    tg_send error "❌ woffy: Credenciales inválidas o error de API."
     exit 1
   fi
 
@@ -194,7 +194,7 @@ token_status_human() {
   fi
 
   if [ "$WOFFY_TOKEN_EXP" -le "$now" ]; then
-    echo "EXPIRADO (caduc el $exp_h)"
+    echo "EXPIRADO (caducó el $exp_h)"
   else
     echo "OK (expira el $exp_h)"
   fi
@@ -382,11 +382,11 @@ cron_count() {
 }
 
 # 
-# Help (MUCHO ms completa)
+# Help
 # 
 show_help() {
 cat <<EOF
-woffy v$VERSION  CLI para fichar en Woffu (modo usuario, sin sudo)
+woffy v$VERSION - CLI para fichar en Woffu (modo usuario, sin sudo)
 
 USO:
   woffy <comando> [subcomando] [opciones]
@@ -399,14 +399,14 @@ COMANDOS PRINCIPALES:
   login              Guardar credenciales y generar ficha de trabajador (~/.woffy.user)
   telegram           Configurar Telegram (token/chat/thread/notify) y enviar test
   telegram test      Enviar mensaje de prueba a Telegram
-  doctor             Diagnstico completo (incluye test Telegram)
-  update             Actualizar woffy manteniendo la configuracin
+  doctor             Diagnóstico completo (incluye test Telegram)
+  update             Actualizar woffy manteniendo la configuración
   schedule           Gestionar cron
-  version            Mostrar versin
+  version            Mostrar versión
   uninstall          Desinstalar woffy (borra binario, config y cron)
   help               Mostrar esta ayuda
 
-CONFIGURACIN:
+CONFIGURACIÓN:
   - Credenciales: $CONFIG_FILE
   - Token cache:  $TOKEN_FILE
   - Log:          $LOG_FILE
@@ -440,7 +440,7 @@ EJEMPLOS:
 NOTAS:
   - Para 'in', woffy consulta /workdaylite y NO ficha si ScheduleHours <= 0.
   - Si la API no permite determinar estado (unknown), woffy aborta por seguridad.
-  - Toda la informacin del usuario se guarda localmente tras 'woffy login'.
+  - Toda la información del usuario se guarda localmente tras 'woffy login'.
 EOF
 }
 
@@ -463,7 +463,7 @@ case "${1:-}" in
       PASS="$3"
     else
       read -p "Correo: " EMAIL
-      read -s -p "Contrasea: " PASS
+      read -s -p "Contraseña: " PASS
       echo
     fi
 
@@ -497,32 +497,32 @@ case "${1:-}" in
     
     if [ -n "$uj" ] && echo "$uj" | jq -e 'if type=="array" then .[0].UserId else .UserId end' >/dev/null 2>&1; then
       save_user_card "$uj"
-      echo " Login correcto. Ficha de trabajador guardada."
+      echo "✅ Login correcto. Ficha de trabajador guardada."
     else
-      echo " Login OK, pero no se pudo generar la ficha de usuario (API error)."
+      echo "⚠️ Login OK, pero no se pudo generar la ficha de usuario (API error)."
     fi
     ;;
 
 
   user)
     if [ ! -f "$USER_FILE" ]; then
-      echo " No existe ficha de usuario. Ejecuta: woffy login"
+      echo "❌ No existe ficha de usuario. Ejecuta: woffy login"
       exit 1
     fi
 
     # shellcheck disable=SC1090
     source "$USER_FILE" 2>/dev/null || {
-      echo " Ficha de usuario corrupta."
+      echo "❌ Ficha de usuario corrupta."
       exit 1
     }
 
-    echo " Usuario Woffy"
+    echo "👤 Usuario Woffy"
     echo "Nombre:   ${WOFFY_FULL_NAME:-?}"
     echo "Email:    ${WOFFY_EMAIL:-?}"
     echo "Empresa:  ${WOFFY_COMPANY_NAME:-?}"
     echo "Oficina:  ${WOFFY_OFFICE_NAME:-?}"
     echo "User ID:  ${WOFFY_USER_ID:-?}"
-    echo "User N:  ${WOFFY_USER_NUMBER:-?}"
+    echo "User Nº:  ${WOFFY_USER_NUMBER:-?}"
     echo "Horario:  ${WOFFY_SCHEDULE_NAME:-?}"
     ;;
 
@@ -531,13 +531,13 @@ case "${1:-}" in
     if [ "${2:-}" = "test" ]; then
       # shellcheck disable=SC1090
       source "$CONFIG_FILE" 2>/dev/null || true
-      tg_send test " Telegram OK (woffy)"
-      echo " Mensaje enviado."
+      tg_send test "🟢 Telegram OK (woffy)"
+      echo "✅ Mensaje enviado."
       exit 0
     fi
 
-    echo "Configuracin de Telegram (Enter para saltar / mantener)"
-    # valores actuales (si existen) para no pisar con vaco
+    echo "Configuración de Telegram (Enter para saltar / mantener)"
+    # valores actuales (si existen) para no pisar con vacío
     CUR_TG_TOKEN="${TG_TOKEN:-}"
     CUR_CHAT_ID="${TG_CHAT_ID:-}"
     CUR_THREAD="${TG_THREAD:-}"
@@ -566,8 +566,8 @@ case "${1:-}" in
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
 
-    echo " Telegram guardado. (notify=$TG_NOTIFY${TG_THREAD:+, thread=$TG_THREAD})"
-    tg_send test " Telegram configurado correctamente en woffy"
+    echo "✅ Telegram guardado. (notify=$TG_NOTIFY${TG_THREAD:+, thread=$TG_THREAD})"
+    tg_send test "🟢 Telegram configurado correctamente en woffy"
     ;;
 
   status)
@@ -576,9 +576,9 @@ case "${1:-}" in
     export TOKEN
     st="$(get_status)"
     case "$st" in
-      in) echo " DENTRO" ;;
-      out) echo " FUERA" ;;
-      *) echo " Estado desconocido (API/JSON inesperado)" ;;
+      in) echo "🟢 DENTRO" ;;
+      out) echo "⚪ FUERA" ;;
+      *) echo "⚠️ Estado desconocido (API/JSON inesperado)" ;;
     esac
     ;;
 
@@ -592,14 +592,14 @@ case "${1:-}" in
     log "Solicitud: $1 | Estado actual: $st"
 
     if [ "$st" = "unknown" ]; then
-      MSG=" No se puede determinar el estado actual. Abortando por seguridad."
+      MSG="⚠️ No se puede determinar el estado actual. Abortando por seguridad."
       echo "$MSG"
       tg_send error "$MSG"
       exit 1
     fi
 
     if [ "$1" = "in" ] && [ "$st" = "in" ]; then
-      MSG=" No ficho IN: ya estabas DENTRO."
+      MSG="⚠️ No ficho IN: ya estabas DENTRO."
       echo "$MSG"
       log "$MSG"
       tg_send error "$MSG"
@@ -607,7 +607,7 @@ case "${1:-}" in
     fi
 
     if [ "$1" = "out" ] && [ "$st" = "out" ]; then
-      MSG=" No ficho OUT: ya estabas FUERA."
+      MSG="⚠️ No ficho OUT: ya estabas FUERA."
       echo "$MSG"
       log "$MSG"
       tg_send error "$MSG"
@@ -618,8 +618,8 @@ case "${1:-}" in
       wd="$(get_workday)"
       if [ -n "$wd" ] && ! is_workday_ok_for_in "$wd"; then
         reason="$(workday_reason "$wd")"
-        [ -z "$reason" ] && reason="da no laborable"
-        MSG=" No se ficha entrada: $reason."
+        [ -z "$reason" ] && reason="día no laborable"
+        MSG="⚠️ No se ficha entrada: $reason."
         echo "$MSG"
         log "$MSG"
         tg_send error "$MSG"
@@ -652,12 +652,12 @@ while [ "$attempt" -le "$MAX_RETRIES" ]; do
 done
 
 if $success; then
-  MSG=" Fichaje correcto: $1"
+  MSG="✅ Fichaje correcto: $1"
   echo "$MSG"
   log "$MSG"
-  tg_send success " *woffy*: Fichaje *$1* realizado ($(date +%H:%M))."
+  tg_send success "✅ *woffy*: Fichaje *$1* realizado ($(date +%H:%M))."
 else
-  MSG=" Error al fichar $1 en la API tras $MAX_RETRIES intentos."
+  MSG="❌ Error al fichar $1 en la API tras $MAX_RETRIES intentos."
   echo "$MSG"
   log "$MSG"
   tg_send error "$MSG"
@@ -671,15 +671,15 @@ fi
     BIN_PATH="$(get_bin_path)"
   
     if [ -z "$BIN_PATH" ]; then
-      echo " No se encuentra el binario actual de woffy"
+      echo "❌ No se encuentra el binario actual de woffy"
       exit 1
     fi
   
     TMP="$(mktemp)"
-    echo " Descargando ltima versin de woffy..."
+    echo "ℹ️ Descargando última versión de woffy..."
   
     if ! curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/main/woffy.sh -o "$TMP"; then
-      echo " Error descargando la actualizacin"
+      echo "❌ Error descargando la actualización"
       rm -f "$TMP"
       exit 1
     fi
@@ -687,7 +687,7 @@ fi
     chmod +x "$TMP"
     mv "$TMP" "$BIN_PATH"
   
-    echo " Woffy actualizado correctamente."
+    echo "✅ Woffy actualizado correctamente."
     exit 0
     ;;
 
@@ -696,7 +696,7 @@ fi
     TOKEN="$(get_token 2>/dev/null || true)"
     export TOKEN
     
-    echo " Diagnstico woffy v$VERSION"
+    echo "🩺 Diagnóstico woffy v$VERSION"
     echo
     echo "Sistema"
     echo "  Bin:     $(get_bin_path)"
@@ -704,7 +704,7 @@ fi
     echo "  Deps:    OK"
     echo "  Lock:    $( [ -d "$LOCK_DIR" ] && echo ACTIVO || echo libre )"
     echo
-    echo "Autenticacin"
+    echo "Autenticación"
     echo "  Token:   $(token_status_human)"
     echo
     echo "Usuario"
@@ -745,7 +745,7 @@ fi
 
     if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
       echo "TG:      OK (enviando test...)"
-      tg_send test " woffy doctor: Telegram OK"
+      tg_send test "🟢 woffy doctor: Telegram OK"
     else
       echo "TG:      NO configurado"
     fi
@@ -762,7 +762,7 @@ fi
         ;;
       clear)
         clear_woffy_cron
-        echo " Cron limpiado."
+        echo "✅ Cron limpiado."
         ;;
       entrada|salida)
         TYPE="in"
@@ -776,7 +776,7 @@ fi
         fi
 
         if [ -n "${3:-}" ]; then
-          validate_time "$3" || { echo "Hora invlida"; exit 1; }
+          validate_time "$3" || { echo "❌ Hora inválida"; exit 1; }
           TIMES=("$3")
         else
           TIMES=("${DEFAULT_TIMES[@]}")
@@ -792,7 +792,7 @@ fi
 
         crontab "$tmp"
         rm -f "$tmp"
-        echo " Programado $TYPE (${TIMES[*]}) de lunes a viernes"
+        echo "✅ Programado $TYPE (${TIMES[*]}) de lunes a viernes"
         ;;
       *)
         echo "Uso: woffy schedule {list|clear|entrada [HH:MM]|salida [HH:MM]}"
@@ -802,9 +802,9 @@ fi
 
   uninstall)
     check_deps crontab
-    echo "  Esto eliminar completamente woffy de tu usuario."
+    echo "⚠️ Esto eliminará completamente woffy de tu usuario."
     echo "    - Binario"
-    echo "    - Configuracin"
+    echo "    - Configuración"
     echo "    - Token"
     echo "    - Ficha de usuario"
     echo "    - Entradas de cron"
@@ -813,30 +813,31 @@ fi
 
     case "$CONFIRM" in
       s|S|y|Y) ;;
-      *) echo " Cancelado."; exit 0 ;;
+      *) echo "ℹ️ Cancelado."; exit 0 ;;
     esac
 
-    echo " Eliminando cron..."
+    echo "ℹ️ Eliminando cron..."
     clear_woffy_cron
 
     BIN_PATH="$(get_bin_path)"
     if [ -n "$BIN_PATH" ]; then
-      echo "  Eliminando binario: $BIN_PATH"
+      echo "ℹ️ Eliminando binario: $BIN_PATH"
       rm -f "$BIN_PATH"
     fi
 
-    echo "  Eliminando archivos de usuario..."
+    echo "ℹ️ Eliminando archivos de usuario..."
     rm -f "$CONFIG_FILE" "$TOKEN_FILE" "$USER_FILE" "$LOCK_FILE" "$LOG_FILE"
     rm -rf "$LOCK_DIR"
 
-    echo " woffy desinstalado correctamente."
+    echo "✅ woffy desinstalado correctamente."
     exit 0
     ;;
 
   *)
-    echo " Comando desconocido. Ejecuta 'woffy help' para ver las opciones."
+    echo "❌ Comando desconocido. Ejecuta 'woffy help' para ver las opciones."
     exit 1
     ;;
 esac
+
 
 
