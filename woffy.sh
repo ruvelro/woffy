@@ -1,7 +1,7 @@
-﻿#!/bin/bash
+#!/bin/bash
 set -euo pipefail
 
-VERSION="1.0.1"
+VERSION="1.2.0"
 
 # Rutas
 CONFIG_FILE="$HOME/.woffy.conf"
@@ -12,6 +12,21 @@ LOCK_DIR="$HOME/.woffy.lock.d"
 USER_FILE="$HOME/.woffy.user"
 
 API_URL="https://app.woffu.com"
+REPO_RAW_BASE="https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main"
+
+NO_TELEGRAM=false
+
+# Global flags
+if [ "$#" -gt 0 ]; then
+  FILTERED_ARGS=()
+  for arg in "$@"; do
+    case "$arg" in
+      --no-telegram) NO_TELEGRAM=true ;;
+      *) FILTERED_ARGS+=("$arg") ;;
+    esac
+  done
+  set -- "${FILTERED_ARGS[@]}"
+fi
 
 # 
 # Utils
@@ -31,6 +46,64 @@ write_kv_line() {
   local key="$1"
   local value="${2-}"
   printf '%s=%q\n' "$key" "$value"
+}
+
+hash_cmd() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "sha256sum"
+  elif command -v shasum >/dev/null 2>&1; then
+    echo "shasum -a 256"
+  elif command -v openssl >/dev/null 2>&1; then
+    echo "openssl dgst -sha256"
+  else
+    echo ""
+  fi
+}
+
+sha256_file() {
+  local file="$1"
+  local hc
+  hc="$(hash_cmd)"
+  [ -z "$hc" ] && return 1
+
+  case "$hc" in
+    "sha256sum")
+      sha256sum "$file" | awk '{print $1}'
+      ;;
+    "shasum -a 256")
+      shasum -a 256 "$file" | awk '{print $1}'
+      ;;
+    *)
+      openssl dgst -sha256 "$file" | awk '{print $NF}'
+      ;;
+  esac
+}
+
+date_days_ago() {
+  local days="$1"
+  if date -d "$days days ago" "+%Y-%m-%d %H:%M:%S" >/dev/null 2>&1; then
+    date -d "$days days ago" "+%Y-%m-%d %H:%M:%S"
+  else
+    date -v-"$days"d "+%Y-%m-%d %H:%M:%S"
+  fi
+}
+
+is_valid_date() {
+  [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+}
+
+date_to_boundary() {
+  local day="$1"
+  local mode="${2:-start}" # start|end
+  if [ "$mode" = "end" ]; then
+    echo "$day 23:59:59"
+  else
+    echo "$day 00:00:00"
+  fi
+}
+
+json_escape() {
+  echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
 get_bin_path() { command -v woffy 2>/dev/null || true; }
@@ -86,6 +159,7 @@ acquire_lock() {
 # Telegram
 # 
 tg_send() {
+  [ "$NO_TELEGRAM" = "true" ] && return
   [ -z "${TG_TOKEN:-}" ] && return
   [ -z "${TG_CHAT_ID:-}" ] && return
 
@@ -111,7 +185,7 @@ tg_send() {
 # 
 need_config=true
 case "${1:-}" in
-  help|version|login|uninstall|"")
+  help|version|login|uninstall|schedule|report|update|backup|restore|changelog|self-test|notify|"")
     need_config=false
     ;;
 esac
@@ -273,6 +347,202 @@ post_sign() {
   fi
 }
 
+run_sign_flow() {
+  local mode="$1"          # in | out
+  local dry_run="${2:-false}"
+  local st wd reason action msg
+
+  st="$(get_status)"
+  log "Solicitud: $mode | Estado actual: $st | DryRun=$dry_run"
+
+  if [ "$st" = "unknown" ]; then
+    msg="⚠️ No se puede determinar el estado actual. Abortando por seguridad."
+    echo "$msg"
+    tg_send error "$msg"
+    return 1
+  fi
+
+  if [ "$mode" = "in" ] && [ "$st" = "in" ]; then
+    msg="⚠️ No ficho IN: ya estabas DENTRO."
+    echo "$msg"
+    log "$msg"
+    tg_send error "$msg"
+    return 0
+  fi
+
+  if [ "$mode" = "out" ] && [ "$st" = "out" ]; then
+    msg="⚠️ No ficho OUT: ya estabas FUERA."
+    echo "$msg"
+    log "$msg"
+    tg_send error "$msg"
+    return 0
+  fi
+
+  if [ "$mode" = "in" ]; then
+    wd="$(get_workday)"
+    if [ -n "$wd" ] && ! is_workday_ok_for_in "$wd"; then
+      reason="$(workday_reason "$wd")"
+      [ -z "$reason" ] && reason="día no laborable"
+      msg="⚠️ No se ficha entrada: $reason."
+      echo "$msg"
+      log "$msg"
+      tg_send error "$msg"
+      return 0
+    fi
+  fi
+
+  if [ "$dry_run" = "true" ]; then
+    msg="ℹ️ DRY-RUN: se ficharía '$mode' ahora."
+    echo "$msg"
+    log "$msg"
+    tg_send info "$msg"
+    return 0
+  fi
+
+  action="clock_in"
+  [ "$mode" = "out" ] && action="clock_out"
+
+  local max_retries retry_delay attempt success
+  max_retries=4
+  retry_delay=15
+  attempt=1
+  success=false
+
+  while [ "$attempt" -le "$max_retries" ]; do
+    if post_sign "$action"; then
+      success=true
+      break
+    fi
+
+    log "Intento $attempt/$max_retries fallido al fichar $mode."
+    if [ "$attempt" -lt "$max_retries" ]; then
+      log "Reintentando en ${retry_delay}s..."
+      sleep "$retry_delay"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  if $success; then
+    msg="✅ Fichaje correcto: $mode"
+    echo "$msg"
+    log "$msg"
+    tg_send success "✅ *woffy*: Fichaje *$mode* realizado ($(date +%H:%M))."
+    return 0
+  fi
+
+  msg="❌ Error al fichar $mode en la API tras $max_retries intentos."
+  echo "$msg"
+  log "$msg"
+  tg_send error "$msg"
+  return 1
+}
+
+build_weekly_report() {
+  local since="$1"
+  local until="$2"
+  local format="${3:-text}" # text|json|csv
+  local now in_count out_count err_count warn_count
+  now="$(date '+%Y-%m-%d %H:%M:%S')"
+
+  if [ ! -f "$LOG_FILE" ]; then
+    in_count=0; out_count=0; err_count=0; warn_count=0
+  else
+    in_count="$(awk -v since="$since" -v until="$until" '
+      match($0,/^\[([0-9-]+ [0-9:]+)\]/,m){ if(m[1] >= since && m[1] <= until && index($0,"Fichaje correcto: in")>0) c++ }
+      END{print c+0}
+    ' "$LOG_FILE")"
+    out_count="$(awk -v since="$since" -v until="$until" '
+      match($0,/^\[([0-9-]+ [0-9:]+)\]/,m){ if(m[1] >= since && m[1] <= until && index($0,"Fichaje correcto: out")>0) c++ }
+      END{print c+0}
+    ' "$LOG_FILE")"
+    err_count="$(awk -v since="$since" -v until="$until" '
+      match($0,/^\[([0-9-]+ [0-9:]+)\]/,m){ if(m[1] >= since && m[1] <= until && index($0,"Error al fichar")>0) c++ }
+      END{print c+0}
+    ' "$LOG_FILE")"
+    warn_count="$(awk -v since="$since" -v until="$until" '
+      match($0,/^\[([0-9-]+ [0-9:]+)\]/,m){
+        if(m[1] >= since && m[1] <= until &&
+          (index($0,"No ficho IN")>0 || index($0,"No ficho OUT")>0 || index($0,"No se ficha entrada")>0 || index($0,"Abortando por seguridad")>0)
+        ) c++
+      }
+      END{print c+0}
+    ' "$LOG_FILE")"
+  fi
+
+  case "$format" in
+    json)
+      cat <<EOF
+{"generated_at":"$(json_escape "$now")","from":"$(json_escape "$since")","to":"$(json_escape "$until")","entries_in":$in_count,"entries_out":$out_count,"warnings":$warn_count,"errors":$err_count}
+EOF
+      ;;
+    csv)
+      echo "generated_at,from,to,entries_in,entries_out,warnings,errors"
+      echo "\"$now\",\"$since\",\"$until\",$in_count,$out_count,$warn_count,$err_count"
+      ;;
+    *)
+      cat <<EOF
+📊 Reporte woffy
+Periodo: $since -> $until
+Generado: $now
+✅ Entradas: $in_count
+✅ Salidas: $out_count
+⚠️ Avisos: $warn_count
+❌ Errores: $err_count
+EOF
+      ;;
+  esac
+}
+
+self_test() {
+  local fails=0
+  local ok=0
+  local msg
+
+  check_item() {
+    local name="$1"
+    shift
+    if "$@"; then
+      echo "✅ $name"
+      ok=$((ok + 1))
+    else
+      echo "❌ $name"
+      fails=$((fails + 1))
+    fi
+  }
+
+  file_perm_600() {
+    local f="$1"
+    local p=""
+    [ ! -f "$f" ] && return 1
+    p="$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f" 2>/dev/null || echo "")"
+    [ "$p" = "600" ]
+  }
+
+  check_item "Dependencias base (curl)" command -v curl
+  check_item "Dependencias JSON (jq)" command -v jq
+  check_item "Archivo config legible" test -f "$CONFIG_FILE"
+  check_item "Permiso config 600" file_perm_600 "$CONFIG_FILE"
+  check_item "Comando crontab disponible" command -v crontab
+  check_item "Log accesible" touch "$LOG_FILE"
+
+  if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE" 2>/dev/null || true
+    msg="$(get_token 2>/dev/null || true)"
+    if [ -n "$msg" ]; then
+      echo "✅ Token API disponible"
+      ok=$((ok + 1))
+    else
+      echo "⚠️ Token API no disponible (credenciales/API)"
+    fi
+  else
+    echo "⚠️ Sin config: no se prueba autenticación API"
+  fi
+
+  echo "Resumen self-test: OK=$ok FAIL=$fails"
+  [ "$fails" -eq 0 ]
+}
+
 # 
 # Workdaylite (solo para IN)
 # 
@@ -375,10 +645,170 @@ clear_woffy_cron() {
   rm -f "$tmp"
 }
 
+pause_woffy_cron() {
+  local tmp
+  tmp="$(mktemp)"
+  crontab -l 2>/dev/null | awk '
+    {
+      if ($0 ~ /# woffy-/ && $0 !~ /^# PAUSED-WOFFY /) {
+        print "# PAUSED-WOFFY " $0
+      } else {
+        print
+      }
+    }
+  ' > "$tmp" || true
+  crontab "$tmp" || true
+  rm -f "$tmp"
+}
+
+resume_woffy_cron() {
+  local tmp
+  tmp="$(mktemp)"
+  crontab -l 2>/dev/null | sed 's/^# PAUSED-WOFFY //' > "$tmp" || true
+  crontab "$tmp" || true
+  rm -f "$tmp"
+}
+
 validate_time() { [[ "$1" =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]; }
 
 cron_count() {
   crontab -l 2>/dev/null | grep -c '# woffy-' || true
+}
+
+backup_files() {
+  local out="${1:-$HOME/woffy-backup-$(date +%Y%m%d-%H%M%S).tar.gz}"
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  mkdir -p "$tmpdir"
+  [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$tmpdir/"
+  [ -f "$TOKEN_FILE" ] && cp "$TOKEN_FILE" "$tmpdir/"
+  [ -f "$USER_FILE" ] && cp "$USER_FILE" "$tmpdir/"
+  [ -f "$LOG_FILE" ] && cp "$LOG_FILE" "$tmpdir/"
+  tar -czf "$out" -C "$tmpdir" . >/dev/null 2>&1
+  rm -rf "$tmpdir"
+  echo "$out"
+}
+
+restore_files() {
+  local in="$1"
+  [ ! -f "$in" ] && return 1
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  tar -xzf "$in" -C "$tmpdir" >/dev/null 2>&1 || { rm -rf "$tmpdir"; return 1; }
+  [ -f "$tmpdir/.woffy.conf" ] && cp "$tmpdir/.woffy.conf" "$CONFIG_FILE"
+  [ -f "$tmpdir/.woffy.token" ] && cp "$tmpdir/.woffy.token" "$TOKEN_FILE"
+  [ -f "$tmpdir/.woffy.user" ] && cp "$tmpdir/.woffy.user" "$USER_FILE"
+  [ -f "$tmpdir/.woffy.log" ] && cp "$tmpdir/.woffy.log" "$LOG_FILE"
+  chmod 600 "$CONFIG_FILE" "$TOKEN_FILE" "$USER_FILE" 2>/dev/null || true
+  rm -rf "$tmpdir"
+  return 0
+}
+
+upsert_config_key() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  [ -f "$CONFIG_FILE" ] && grep -v "^${key}=" "$CONFIG_FILE" > "$tmp" || true
+  write_kv_line "$key" "$value" >> "$tmp"
+  mv "$tmp" "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+}
+
+install_systemd_user_timers() {
+  local script="$1"
+  local dir="$HOME/.config/systemd/user"
+  mkdir -p "$dir"
+
+  cat > "$dir/woffy-in.service" <<EOF
+[Unit]
+Description=Woffy clock in
+[Service]
+Type=oneshot
+ExecStart=$script in
+EOF
+  cat > "$dir/woffy-in.timer" <<'EOF'
+[Unit]
+Description=Woffy IN timer
+[Timer]
+OnCalendar=Mon..Fri 09:00
+OnCalendar=Mon..Fri 15:30
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+
+  cat > "$dir/woffy-out.service" <<EOF
+[Unit]
+Description=Woffy clock out
+[Service]
+Type=oneshot
+ExecStart=$script out
+EOF
+  cat > "$dir/woffy-out.timer" <<'EOF'
+[Unit]
+Description=Woffy OUT timer
+[Timer]
+OnCalendar=Mon..Fri 14:00
+OnCalendar=Mon..Fri 18:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+
+  cat > "$dir/woffy-report.service" <<EOF
+[Unit]
+Description=Woffy weekly report
+[Service]
+Type=oneshot
+ExecStart=$script report telegram
+EOF
+  cat > "$dir/woffy-report.timer" <<'EOF'
+[Unit]
+Description=Woffy weekly report timer
+[Timer]
+OnCalendar=Fri 18:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl --user daemon-reload
+  systemctl --user enable --now woffy-in.timer woffy-out.timer woffy-report.timer
+}
+
+remove_systemd_user_timers() {
+  local dir="$HOME/.config/systemd/user"
+  systemctl --user disable --now woffy-in.timer woffy-out.timer woffy-report.timer 2>/dev/null || true
+  rm -f "$dir/woffy-in.service" "$dir/woffy-in.timer" \
+        "$dir/woffy-out.service" "$dir/woffy-out.timer" \
+        "$dir/woffy-report.service" "$dir/woffy-report.timer"
+  systemctl --user daemon-reload 2>/dev/null || true
+}
+
+show_changelog() {
+  local remote local_v remote_v
+  local_v="$VERSION"
+  echo "Versión local: $local_v"
+  remote="$(curl -fsSL "$REPO_RAW_BASE/woffy.sh" 2>/dev/null || true)"
+  if [ -z "$remote" ]; then
+    echo "⚠️ No se pudo consultar versión remota."
+    return 0
+  fi
+  remote_v="$(echo "$remote" | awk -F'"' '/^VERSION=/{print $2; exit}')"
+  [ -z "$remote_v" ] && remote_v="desconocida"
+  echo "Versión remota: $remote_v"
+  if [ "$remote_v" = "$local_v" ]; then
+    echo "✅ Estás al día."
+  else
+    echo "ℹ️ Hay actualización disponible."
+  fi
+
+  echo
+  echo "Últimos cambios (commits):"
+  curl -fsSL "https://api.github.com/repos/ruvelro/woffy/commits?per_page=8" 2>/dev/null \
+    | jq -r '.[] | "- " + (.commit.message | split("\n")[0]) + " (" + (.sha[0:7]) + ")"' 2>/dev/null \
+    || echo "- No disponible"
 }
 
 # 
@@ -389,17 +819,24 @@ cat <<EOF
 woffy v$VERSION - CLI para fichar en Woffu (modo usuario, sin sudo)
 
 USO:
-  woffy <comando> [subcomando] [opciones]
+  woffy [--no-telegram] <comando> [subcomando] [opciones]
 
 COMANDOS PRINCIPALES:
   in                 Fichar entrada (solo ficha si estabas fuera y hoy hay horas programadas)
   out                Fichar salida  (solo ficha si estabas dentro)
+  dry-run            Simular fichaje sin enviar nada a la API (dry-run in|out)
   status             Mostrar estado actual (in/out/unknown)
+  report             Reporte de fichajes (admite --from/--to/--format/telegram)
+  notify             Enviar notificación de prueba a Telegram (notify test ...)
+  self-test          Prueba automática de dependencias y estado local
+  backup             Backup de config/token/user/log
+  restore            Restaurar backup de woffy
+  changelog          Versión local/remota y últimos commits
   user               Mostrar ficha de trabajador
   login              Guardar credenciales y generar ficha de trabajador (~/.woffy.user)
   telegram           Configurar Telegram (token/chat/thread/notify) y enviar test
   telegram test      Enviar mensaje de prueba a Telegram
-  doctor             Diagnóstico completo (incluye test Telegram)
+  doctor             Diagnóstico completo (doctor --json)
   update             Actualizar woffy manteniendo la configuración
   schedule           Gestionar cron
   version            Mostrar versión
@@ -424,12 +861,23 @@ TELEGRAM:
 CRON / SCHEDULE:
   woffy schedule list
   woffy schedule clear
+  woffy schedule pause
+  woffy schedule resume
+  woffy schedule timezone Europe/Madrid
+  woffy schedule report            (viernes 18:00)
+  woffy schedule systemd enable|disable|status
   woffy schedule entrada HH:MM   (L-V)
   woffy schedule salida  HH:MM   (L-V)
 
 EJEMPLOS:
   woffy login
   woffy status
+  woffy dry-run in
+  woffy report --format json
+  woffy report --from 2026-01-01 --to 2026-01-31
+  woffy notify test warning "Mensaje de prueba"
+  woffy backup
+  woffy changelog
   woffy in
   woffy out
   woffy telegram
@@ -572,6 +1020,7 @@ case "${1:-}" in
 
   status)
     check_deps curl jq date
+    [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
     TOKEN="$(get_token)"
     export TOKEN
     st="$(get_status)"
@@ -582,92 +1031,146 @@ case "${1:-}" in
     esac
     ;;
 
-  in|out)
+  dry-run)
     check_deps curl jq awk date
+    [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
+    MODE="${2:-}"
+    if [ "$MODE" != "in" ] && [ "$MODE" != "out" ]; then
+      echo "Uso: woffy dry-run {in|out}"
+      exit 1
+    fi
     acquire_lock
     TOKEN="$(get_token)"
     export TOKEN
+    run_sign_flow "$MODE" true
+    ;;
 
-    st="$(get_status)"
-    log "Solicitud: $1 | Estado actual: $st"
+  report)
+    check_deps awk date
+    [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" 2>/dev/null || true
+    REPORT_FROM="$(date_days_ago 7 | awk '{print $1}')"
+    REPORT_TO="$(date '+%Y-%m-%d')"
+    REPORT_FORMAT="text"
+    SEND_TG=false
 
-    if [ "$st" = "unknown" ]; then
-      MSG="⚠️ No se puede determinar el estado actual. Abortando por seguridad."
-      echo "$MSG"
-      tg_send error "$MSG"
-      exit 1
-    fi
+    shift || true
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        telegram)
+          SEND_TG=true
+          shift
+          ;;
+        --from)
+          [ -z "${2:-}" ] && { echo "❌ Falta valor para --from"; exit 1; }
+          REPORT_FROM="$2"
+          shift 2
+          ;;
+        --to)
+          [ -z "${2:-}" ] && { echo "❌ Falta valor para --to"; exit 1; }
+          REPORT_TO="$2"
+          shift 2
+          ;;
+        --format)
+          [ -z "${2:-}" ] && { echo "❌ Falta valor para --format"; exit 1; }
+          REPORT_FORMAT="$2"
+          shift 2
+          ;;
+        *)
+          echo "❌ Opción desconocida en report: $1"
+          exit 1
+          ;;
+      esac
+    done
 
-    if [ "$1" = "in" ] && [ "$st" = "in" ]; then
-      MSG="⚠️ No ficho IN: ya estabas DENTRO."
-      echo "$MSG"
-      log "$MSG"
-      tg_send error "$MSG"
-      exit 0
-    fi
+    is_valid_date "$REPORT_FROM" || { echo "❌ Fecha inválida en --from (YYYY-MM-DD)"; exit 1; }
+    is_valid_date "$REPORT_TO" || { echo "❌ Fecha inválida en --to (YYYY-MM-DD)"; exit 1; }
+    case "$REPORT_FORMAT" in text|json|csv) ;; *) echo "❌ Formato inválido: $REPORT_FORMAT"; exit 1 ;; esac
 
-    if [ "$1" = "out" ] && [ "$st" = "out" ]; then
-      MSG="⚠️ No ficho OUT: ya estabas FUERA."
-      echo "$MSG"
-      log "$MSG"
-      tg_send error "$MSG"
-      exit 0
-    fi
-
-    if [ "$1" = "in" ]; then
-      wd="$(get_workday)"
-      if [ -n "$wd" ] && ! is_workday_ok_for_in "$wd"; then
-        reason="$(workday_reason "$wd")"
-        [ -z "$reason" ] && reason="día no laborable"
-        MSG="⚠️ No se ficha entrada: $reason."
-        echo "$MSG"
-        log "$MSG"
-        tg_send error "$MSG"
-        exit 0
+    REPORT_MSG="$(build_weekly_report "$(date_to_boundary "$REPORT_FROM" start)" "$(date_to_boundary "$REPORT_TO" end)" "$REPORT_FORMAT")"
+    echo "$REPORT_MSG"
+    if $SEND_TG; then
+      if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
+        tg_send info "$REPORT_MSG"
+        echo "✅ Reporte enviado a Telegram."
+      else
+        echo "⚠️ Telegram no configurado. Reporte solo mostrado por consola."
       fi
     fi
+    ;;
 
-    ACTION="clock_in"
-    [ "$1" = "out" ] && ACTION="clock_out"
+  notify)
+    check_deps curl
+    [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" 2>/dev/null || true
+    if [ "${2:-}" != "test" ]; then
+      echo "Uso: woffy notify test {success|warning|error|info|all} [mensaje]"
+      exit 1
+    fi
+    KIND="${3:-all}"
+    CUSTOM_MSG="${4:-Mensaje de prueba woffy}"
+    case "$KIND" in
+      success) tg_send success "✅ $CUSTOM_MSG" ;;
+      warning) tg_send info "⚠️ $CUSTOM_MSG" ;;
+      error) tg_send error "❌ $CUSTOM_MSG" ;;
+      info) tg_send info "ℹ️ $CUSTOM_MSG" ;;
+      all)
+        tg_send success "✅ $CUSTOM_MSG"
+        tg_send info "⚠️ $CUSTOM_MSG"
+        tg_send error "❌ $CUSTOM_MSG"
+        tg_send info "ℹ️ $CUSTOM_MSG"
+        ;;
+      *)
+        echo "❌ Tipo inválido: $KIND"
+        exit 1
+        ;;
+    esac
+    echo "✅ Notificación enviada."
+    ;;
 
-MAX_RETRIES=4
-RETRY_DELAY=15
-attempt=1
-success=false
+  self-test)
+    check_deps curl jq awk date
+    [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" 2>/dev/null || true
+    self_test || exit 1
+    ;;
 
-while [ "$attempt" -le "$MAX_RETRIES" ]; do
-  if post_sign "$ACTION"; then
-    success=true
-    break
-  fi
+  backup)
+    check_deps tar
+    OUT="${2:-}"
+    BAK_PATH="$(backup_files "$OUT")"
+    echo "✅ Backup creado: $BAK_PATH"
+    ;;
 
-  log "Intento $attempt/$MAX_RETRIES fallido al fichar $1."
-  
-  if [ "$attempt" -lt "$MAX_RETRIES" ]; then
-    log "Reintentando en ${RETRY_DELAY}s..."
-    sleep "$RETRY_DELAY"
-  fi
+  restore)
+    check_deps tar
+    [ -z "${2:-}" ] && { echo "Uso: woffy restore /ruta/backup.tar.gz"; exit 1; }
+    if restore_files "$2"; then
+      echo "✅ Backup restaurado."
+    else
+      echo "❌ No se pudo restaurar el backup."
+      exit 1
+    fi
+    ;;
 
-  attempt=$((attempt + 1))
-done
+  changelog)
+    check_deps curl jq awk
+    show_changelog
+    ;;
 
-if $success; then
-  MSG="✅ Fichaje correcto: $1"
-  echo "$MSG"
-  log "$MSG"
-  tg_send success "✅ *woffy*: Fichaje *$1* realizado ($(date +%H:%M))."
-else
-  MSG="❌ Error al fichar $1 en la API tras $MAX_RETRIES intentos."
-  echo "$MSG"
-  log "$MSG"
-  tg_send error "$MSG"
-  exit 1
-fi
-
+  in|out)
+    check_deps curl jq awk date
+    [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
+    acquire_lock
+    TOKEN="$(get_token)"
+    export TOKEN
+    run_sign_flow "$1" false || exit 1
     ;;
 
   update)
     check_deps curl
+    HC="$(hash_cmd)"
+    if [ -z "$HC" ]; then
+      echo "❌ Falta herramienta de hash (sha256sum/shasum/openssl)."
+      exit 1
+    fi
     BIN_PATH="$(get_bin_path)"
   
     if [ -z "$BIN_PATH" ]; then
@@ -676,13 +1179,30 @@ fi
     fi
   
     TMP="$(mktemp)"
+    TMP_SUM="$(mktemp)"
     echo "ℹ️ Descargando última versión de woffy..."
   
-    if ! curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/main/woffy.sh -o "$TMP"; then
+    if ! curl -fsSL "$REPO_RAW_BASE/woffy.sh" -o "$TMP"; then
       echo "❌ Error descargando la actualización"
       rm -f "$TMP"
       exit 1
     fi
+
+    if ! curl -fsSL "$REPO_RAW_BASE/woffy.sh.sha256" -o "$TMP_SUM"; then
+      echo "❌ Error descargando checksum de la actualización"
+      rm -f "$TMP" "$TMP_SUM"
+      exit 1
+    fi
+
+    EXPECTED_HASH="$(awk '{print $1}' "$TMP_SUM" | head -n1)"
+    ACTUAL_HASH="$(sha256_file "$TMP" || echo "")"
+    if [ -z "$EXPECTED_HASH" ] || [ -z "$ACTUAL_HASH" ] || [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+      echo "❌ Verificación SHA256 fallida. Actualización cancelada."
+      log "Checksum update mismatch. expected=$EXPECTED_HASH actual=$ACTUAL_HASH"
+      rm -f "$TMP" "$TMP_SUM"
+      exit 1
+    fi
+    rm -f "$TMP_SUM"
   
     chmod +x "$TMP"
     mv "$TMP" "$BIN_PATH"
@@ -695,6 +1215,17 @@ fi
     check_deps curl jq awk date
     TOKEN="$(get_token 2>/dev/null || true)"
     export TOKEN
+    if [ "${2:-}" = "--json" ]; then
+      CFG="false"; [ -f "$CONFIG_FILE" ] && CFG="true"
+      LCK="false"; [ -d "$LOCK_DIR" ] && LCK="true"
+      USTAT="$(user_card_summary)"
+      ST="unknown"; [ -n "${TOKEN:-}" ] && ST="$(get_status)"
+      TG="false"; [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] && TG="true"
+      cat <<EOF
+{"version":"$VERSION","bin":"$(json_escape "$(get_bin_path)")","config":$CFG,"lock":$LCK,"token":"$(json_escape "$(token_status_human)")","status":"$(json_escape "$ST")","user":"$(json_escape "$USTAT")","telegram":$TG}
+EOF
+      exit 0
+    fi
     
     echo "🩺 Diagnóstico woffy v$VERSION"
     echo
@@ -753,16 +1284,69 @@ fi
 
   schedule)
     check_deps crontab readlink
+    [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" 2>/dev/null || true
     SCRIPT_PATH="$(get_script_path)"
     SCRIPT_PATH_ESCAPED="$(printf '%q' "$SCRIPT_PATH")"
+    TZ_LINE=""
+    [ -n "${WOFFY_TZ:-}" ] && TZ_LINE="CRON_TZ=$WOFFY_TZ # woffy-tz"
 
     case "${2:-}" in
       list)
-        crontab -l 2>/dev/null | grep '# woffy-' || echo "Sin tareas."
+        crontab -l 2>/dev/null | grep 'woffy-' || echo "Sin tareas."
+        [ -n "${WOFFY_TZ:-}" ] && echo "Timezone configurada: $WOFFY_TZ"
         ;;
       clear)
         clear_woffy_cron
         echo "✅ Cron limpiado."
+        ;;
+      pause)
+        pause_woffy_cron
+        echo "✅ Cron de woffy en pausa."
+        ;;
+      resume)
+        resume_woffy_cron
+        echo "✅ Cron de woffy reanudado."
+        ;;
+      report)
+        tmp="$(mktemp)"
+        crontab -l 2>/dev/null | grep -v '# woffy-report' > "$tmp" || true
+        [ -n "$TZ_LINE" ] && {
+          grep -q '# woffy-tz' "$tmp" || echo "$TZ_LINE" >> "$tmp"
+        }
+        echo "0 18 * * 5 $SCRIPT_PATH_ESCAPED report telegram # woffy-report" >> "$tmp"
+        crontab "$tmp"
+        rm -f "$tmp"
+        echo "✅ Reporte semanal programado (viernes 18:00)."
+        ;;
+      timezone)
+        [ -z "${3:-}" ] && { echo "Uso: woffy schedule timezone <TZ>"; exit 1; }
+        upsert_config_key "WOFFY_TZ" "$3"
+        tmp="$(mktemp)"
+        crontab -l 2>/dev/null | grep -v '# woffy-tz' > "$tmp" || true
+        echo "CRON_TZ=$3 # woffy-tz" >> "$tmp"
+        crontab "$tmp"
+        rm -f "$tmp"
+        echo "✅ Timezone de cron guardada: $3"
+        ;;
+      systemd)
+        check_deps systemctl
+        case "${3:-}" in
+          enable|install)
+            install_systemd_user_timers "$SCRIPT_PATH"
+            echo "✅ Timers systemd --user activados."
+            ;;
+          disable|remove)
+            remove_systemd_user_timers
+            echo "✅ Timers systemd --user eliminados."
+            ;;
+          status)
+            systemctl --user status woffy-in.timer woffy-out.timer woffy-report.timer --no-pager || true
+            ;;
+          *)
+            echo "Uso: woffy schedule systemd {enable|disable|status}"
+            exit 1
+            ;;
+        esac
         ;;
       entrada|salida)
         TYPE="in"
@@ -784,6 +1368,9 @@ fi
 
         tmp="$(mktemp)"
         crontab -l 2>/dev/null | grep -v "$TAG" > "$tmp" || true
+        [ -n "$TZ_LINE" ] && {
+          grep -q '# woffy-tz' "$tmp" || echo "$TZ_LINE" >> "$tmp"
+        }
 
         for T in "${TIMES[@]}"; do
           IFS=':' read -r H M <<< "$T"
@@ -795,7 +1382,7 @@ fi
         echo "✅ Programado $TYPE (${TIMES[*]}) de lunes a viernes"
         ;;
       *)
-        echo "Uso: woffy schedule {list|clear|entrada [HH:MM]|salida [HH:MM]}"
+        echo "Uso: woffy schedule {list|clear|pause|resume|timezone <TZ>|report|systemd {enable|disable|status}|entrada [HH:MM]|salida [HH:MM]}"
         ;;
     esac
     ;;

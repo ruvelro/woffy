@@ -1,230 +1,115 @@
-# woffy — fichajes Woffu desde terminal con curl
+﻿# woffy v1.2.0
 
-**woffy** es una utilidad de línea de comandos para fichar **entrada** y **salida** en Woffu directamente desde la terminal, sin navegador y sin apps oficiales.
+CLI para fichar en Woffu desde terminal, automatizar fichajes y notificar por Telegram.
 
-Está pensada para:
-- fichar rápido con `woffy in` / `woffy out`
-- automatizar fichajes con `cron`
-- recibir notificaciones por Telegram (opcional)
-- funcionar **sin sudo**, solo con privilegios de usuario
-
----
-
-## ✅ Instalación (modo usuario)
-
-Instala woffy en `~/.local/bin` y añade el PATH si es necesario.
-
+## Instalación (sin sudo)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash
 ```
 
-Con credenciales iniciales:
-
+Con credenciales:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash -s - "EMAIL" "PASSWORD"
 ```
 
-Si Bash sigue apuntando a una ruta antigua:
+## Seguridad
+- Lock de ejecución para evitar concurrencia.
+- Archivos sensibles con permisos `600`.
+- `install` y `update` con verificación SHA256 (`woffy.sh.sha256`).
 
----
+## Comandos principales
+- `woffy in`
+- `woffy out`
+- `woffy dry-run in|out`
+- `woffy status`
+- `woffy report [telegram] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format text|json|csv]`
+- `woffy doctor [--json]`
+- `woffy self-test`
+- `woffy notify test {success|warning|error|info|all} [mensaje]`
+- `woffy backup [ruta.tar.gz]`
+- `woffy restore <ruta.tar.gz>`
+- `woffy changelog`
+- `woffy update`
+- `woffy uninstall`
 
-## ⚙️ Configuración
+Flag global:
+- `--no-telegram` evita envíos de Telegram en el comando actual.
 
-### Archivo de configuración
-
-`~/.woffy.conf`
-
+Ejemplo:
 ```bash
-WURL_USER="tu@email.com"
-WURL_PASS="tu_password"
+woffy --no-telegram in
 ```
 
-Permisos: `600`.
+## Schedule (cron)
+- `woffy schedule list`
+- `woffy schedule clear`
+- `woffy schedule pause`
+- `woffy schedule resume`
+- `woffy schedule entrada [HH:MM]`
+- `woffy schedule salida [HH:MM]`
+- `woffy schedule report` (viernes 18:00)
+- `woffy schedule timezone <TZ>`
 
-### Telegram (opcional)
+Ejemplo:
+```bash
+woffy schedule timezone Europe/Madrid
+```
 
+## Schedule (systemd --user)
+- `woffy schedule systemd enable`
+- `woffy schedule systemd status`
+- `woffy schedule systemd disable`
+
+Crea timers de IN/OUT y reporte semanal en `~/.config/systemd/user`.
+
+## Reportes
+`woffy report` analiza `~/.woffy.log` y resume:
+- entradas correctas
+- salidas correctas
+- avisos
+- errores
+
+Formatos:
+- `--format text` (por defecto)
+- `--format json`
+- `--format csv`
+
+Filtros de fechas:
+- `--from YYYY-MM-DD`
+- `--to YYYY-MM-DD`
+
+## Telegram
+Configurar:
 ```bash
 woffy telegram
 woffy telegram test
 ```
 
-Variables guardadas:
-
+Probar tipos de notificación:
 ```bash
-TG_TOKEN="..."
-TG_CHAT_ID="..."
-TG_THREAD="..."   # opcional
-TG_NOTIFY="all"   # all | errors | success
+woffy notify test all "Prueba de alertas"
 ```
 
----
-
-## 🔐 Seguridad
-
-- Config y token con permisos `600`
-- Token OAuth cacheado en `~/.woffy.token`
-- Logs en `~/.woffy.log`
-
----
-
-## 🧠 Funcionamiento interno
-
-1. Autenticación OAuth contra Woffu (`/token`)
-2. Cacheo del token local
-3. Uso de `https://app.woffu.com/api/signs`
-4. Notificaciones Telegram según configuración
-
----
-
-## 🧾 Comandos
-
-| Comando | Descripción |
-|------|-----------|
-| `woffy in` | Ficha entrada |
-| `woffy out` | Ficha salida |
-| `woffy status` | Estado actual |
-| `woffy login` | Cambiar credenciales |
-| `woffy telegram` | Configurar Telegram |
-| `woffy telegram test` | Test Telegram |
-| `woffy doctor` | Diagnóstico + test TG |
-| `woffy update` | Actualiza binario |
-| `woffy uninstall` | Desinstala todo |
-| `woffy version` | Versión |
-| `woffy help` | Ayuda completa |
-
----
-
-## ⏰ Cron / schedule
-
-Listar:
-
+## Backup y restore
+Backup:
 ```bash
-woffy schedule list
+woffy backup
+woffy backup /tmp/woffy-backup.tar.gz
 ```
 
-Limpiar solo woffy:
-
+Restore:
 ```bash
-woffy schedule clear
+woffy restore /tmp/woffy-backup.tar.gz
 ```
 
-Pausar / reanudar SOLO woffy:
-
-```bash
-woffy schedule pause
-woffy schedule resume
-```
-
-Entradas:
-
-```bash
-woffy schedule entrada
-woffy schedule entrada 09:00
-```
-
-Salidas:
-
-```bash
-woffy schedule salida
-woffy schedule salida 18:00
-```
-
----
-
-## 🩺 Diagnóstico
-
-```bash
-woffy doctor
-```
-
-Muestra:
-- config
-- token
-- dependencias
-- cron
-- Telegram (envía test si está configurado)
-
----
-
-## 🧹 Desinstalar
-
-```bash
-woffy uninstall
-```
-
-Elimina:
-- binario
-- config
-- token
-- log
-- cron de woffy
-
----
-
-## 🧹 Actualizar
-
+## Update seguro
 ```bash
 woffy update
 ```
+Descarga script + checksum y solo reemplaza el binario si el hash coincide.
 
-Actualiza:
-- binario
-  
-Mantiene:
-- config
-- token
-- log
-- cron de woffy
+## Checklist de release
+Usa `CHECKLIST.md` antes de mergear a `main`.
 
----
-
-## 📌 Woffing in CURL
-
-¿Eres como mi amigo @edkalrio y quieres lo más mínimamente minimalista posible? Basta con que programes las llamadas a la API a mano.  
-
-El endpoint para el token de la API es: POST https://app.woffu.com/token
-
-Y para llamarlo, basta con lanzar:
-
-```bash
-curl -X POST "https://app.woffu.com/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "grant_type=password" \
-  --data-urlencode "username=TU_EMAIL" \
-  --data-urlencode "password=TU_PASSWORD"
-```
-
-La respuesta esperada será: 
-
-```bash
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6...",
-  "expires_in": 3600,
-  "token_type": "bearer"
-}
-```
-Ahora, con el "access_token" en mano, basta con llamar al endpoint de fichaje, POST https://app.woffu.com/api/signs
-
-```bash
-curl -X POST "https://app.woffu.com/api/signs" \
-  -H "Authorization: Bearer TU_ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "signType": 0,
-    "action": "clock_in"
-  }'
-```
-```bash
-curl -X POST "https://app.woffu.com/api/signs" \
-  -H "Authorization: Bearer TU_ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "signType": 0,
-    "action": "clock_out"
-  }'
-```
-Este método (que llamaremos woffy_lite) no comprueba si estás dentro o fuera antes de fichar. Tampoco si es festivo, vacaciones o descanso. No ofrece ningún control. Pero es lo más simple y puro si lo que queremos es "fichar y olvidarnos". 
-
----
-
-GNU GPL v3 License
+## Licencia
+GNU GPL v3
