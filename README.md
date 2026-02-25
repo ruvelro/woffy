@@ -1,26 +1,16 @@
-# woffy v1.3.0-nightly
+# woffy v1.3.0
 
 CLI para fichar en Woffu desde terminal, automatizar fichajes y notificar por Telegram.
 
 ## Instalacion (sin sudo)
-Recomendado (verificando integridad del instalador):
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh
-curl -fsSLO https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh.sha256
-sha256sum -c install-woffy.sh.sha256
-bash install-woffy.sh
+curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash
 ```
 
 Con credenciales:
 ```bash
-bash install-woffy.sh "EMAIL" "PASSWORD"
+curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash -s - "EMAIL" "PASSWORD"
 ```
-
-## Seguridad
-- Lock de ejecucion para evitar concurrencia.
-- Archivos sensibles con permisos `600`.
-- `install` y `update` con verificacion SHA256.
-- `woffy config check` para validar config sin ejecutar contenido.
 
 ## Comandos principales
 - `woffy in`
@@ -42,11 +32,6 @@ bash install-woffy.sh "EMAIL" "PASSWORD"
 Flag global:
 - `--no-telegram` evita envios de Telegram en el comando actual.
 
-Ejemplo:
-```bash
-woffy --no-telegram in
-```
-
 ## Schedule (cron)
 - `woffy schedule list`
 - `woffy schedule clear`
@@ -57,17 +42,10 @@ woffy --no-telegram in
 - `woffy schedule report` (viernes 18:00)
 - `woffy schedule timezone <TZ>`
 
-Ejemplo:
-```bash
-woffy schedule timezone Europe/Madrid
-```
-
 ## Schedule (systemd --user)
 - `woffy schedule systemd enable`
 - `woffy schedule systemd status`
 - `woffy schedule systemd disable`
-
-Crea timers de IN/OUT y reporte semanal en `~/.config/systemd/user`.
 
 ## Reportes
 `woffy report` analiza `~/.woffy.log` y resume:
@@ -76,53 +54,15 @@ Crea timers de IN/OUT y reporte semanal en `~/.config/systemd/user`.
 - avisos
 - errores
 
-Por defecto usa la semana en curso (lunes -> hoy). Si quieres otro rango, usa `--from` y/o `--to`.
+Por defecto usa la semana en curso (lunes -> hoy).
 
-Formatos:
-- `--format text` (por defecto)
-- `--format json`
-- `--format csv`
-
-Filtros de fechas:
-- `--from YYYY-MM-DD`
-- `--to YYYY-MM-DD`
-- `--strict` (falla si `--from > --to`)
-
-Envio por Telegram:
-- `woffy report telegram` fuerza el envio del reporte aunque `TG_NOTIFY` este en `errors` o `success`.
-
-## Telegram
-Configurar:
-```bash
-woffy telegram
-woffy telegram test
-```
-
-Probar tipos de notificacion:
-```bash
-woffy notify test all "Prueba de alertas"
-```
-
-## Backup y restore
-Backup:
-```bash
-woffy backup
-woffy backup /tmp/woffy-backup.tar.gz
-```
-
-Restore:
-```bash
-woffy restore /tmp/woffy-backup.tar.gz
-```
-
-## Update seguro
+## Update
 ```bash
 woffy update
 woffy update nightly
 ```
 `woffy update` usa rama `main`.  
-`woffy update nightly` usa rama `nightly`.  
-En ambos casos descarga script + checksum y solo reemplaza el binario si el hash coincide.
+`woffy update nightly` usa rama `nightly`.
 
 ## Checklist de release
 Usa `CHECKLIST.md` antes de mergear a `main`.

@@ -1,11 +1,12 @@
 #!/usr/bin/env bats
 
 setup() {
-  TEST_DIR="$(mktemp -d)"
+  export TEST_DIR="$(mktemp -d)"
   export HOME="$TEST_DIR/home"
   export BIN_DIR="$TEST_DIR/bin"
   export CRON_FILE="$TEST_DIR/crontab.txt"
   mkdir -p "$HOME" "$BIN_DIR"
+  : > "$TEST_DIR/curl.calls"
 
   cp "$BATS_TEST_DIRNAME/../woffy.sh" "$TEST_DIR/woffy.sh"
   chmod +x "$TEST_DIR/woffy.sh"

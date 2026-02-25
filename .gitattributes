@@ -1,0 +1,10 @@
+* text=auto
+
+# Shell and CI scripts must be LF for shellcheck/shfmt in Linux runners
+*.sh text eol=lf
+*.bats text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Docs/config can also stay LF to avoid mixed endings
+*.md text eol=lf

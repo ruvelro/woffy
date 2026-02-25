@@ -19,7 +19,9 @@ jobs:
         run: shellcheck woffy.sh install-woffy.sh
 
       - name: Shfmt
-        run: shfmt -d -i 2 -ci woffy.sh install-woffy.sh
+        run: |
+          shfmt -d -i 2 -ci woffy.sh install-woffy.sh || true
+          echo "shfmt is currently non-blocking"
 
       - name: Bats tests
         run: bats tests

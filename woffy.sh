@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="1.3.0-nightly"
+VERSION="1.3.0"
 
 # Rutas
 CONFIG_FILE="$HOME/.woffy.conf"
@@ -78,37 +78,6 @@ write_kv_line() {
   printf '%s=%q\n' "$key" "$value"
 }
 
-hash_cmd() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    echo "sha256sum"
-  elif command -v shasum >/dev/null 2>&1; then
-    echo "shasum -a 256"
-  elif command -v openssl >/dev/null 2>&1; then
-    echo "openssl dgst -sha256"
-  else
-    echo ""
-  fi
-}
-
-sha256_file() {
-  local file="$1"
-  local hc
-  hc="$(hash_cmd)"
-  [ -z "$hc" ] && return 1
-
-  case "$hc" in
-    "sha256sum")
-      sha256sum "$file" | awk '{print $1}'
-      ;;
-    "shasum -a 256")
-      shasum -a 256 "$file" | awk '{print $1}'
-      ;;
-    *)
-      openssl dgst -sha256 "$file" | awk '{print $NF}'
-      ;;
-  esac
-}
-
 date_days_ago() {
   local days="$1"
   if date -d "$days days ago" "+%Y-%m-%d %H:%M:%S" >/dev/null 2>&1; then
@@ -180,7 +149,7 @@ validate_kv_file() {
     esac
 
     case "$val" in
-      *'$('*|*'`'*|*';'*|*'|'*|*'&'*|*'<'*|*'>'*)
+      *\$\(*|*'`'*|*';'*|*'|'*|*'&'*|*'<'*|*'>'*)
         return 1
         ;;
     esac
@@ -298,7 +267,9 @@ get_token() {
   now=$(date +%s)
 
   if [ -f "$TOKEN_FILE" ]; then
-    validate_kv_file "$TOKEN_FILE" "token" && safe_source_file "$TOKEN_FILE" "token" 2>/dev/null || true
+    if validate_kv_file "$TOKEN_FILE" "token"; then
+      safe_source_file "$TOKEN_FILE" "token" 2>/dev/null || true
+    fi
     if [ -n "${WOFFY_TOKEN:-}" ] && [ "${WOFFY_TOKEN_EXP:-0}" -gt "$((now + 60))" ]; then
       echo "$WOFFY_TOKEN"
       return
@@ -419,6 +390,7 @@ post_sign() {
 
   now=$(date -Iseconds)
 
+  # shellcheck disable=SC2016
   json_data="$(jq -nc --arg date "$now" --arg action "$action" \
     '{signType:0, date:$date, action:$action}')"
 
@@ -428,6 +400,7 @@ post_sign() {
     -d "$json_data" || true)"
 
   status_code="$(echo "$resp" | tail -n1)"
+  # shellcheck disable=SC2016
   body="$(echo "$resp" | sed '$d')"
 
   if [[ "$status_code" =~ ^2 ]]; then
@@ -632,7 +605,9 @@ self_test() {
 # 
 get_user_id() {
   if [ -f "$USER_FILE" ]; then
-    validate_kv_file "$USER_FILE" "user" && safe_source_file "$USER_FILE" "user" 2>/dev/null || true
+    if validate_kv_file "$USER_FILE" "user"; then
+      safe_source_file "$USER_FILE" "user" 2>/dev/null || true
+    fi
     [ -n "${WOFFY_USER_ID:-}" ] && { echo "$WOFFY_USER_ID"; return; }
   fi
 
@@ -714,7 +689,11 @@ user_card_summary() {
   [ ! -f "$USER_FILE" ] && { echo "NO"; return; }
   validate_kv_file "$USER_FILE" "user" || { echo "INVALIDO"; return; }
   safe_source_file "$USER_FILE" "user" 2>/dev/null || { echo "INVALIDO"; return; }
-  [ -n "${WOFFY_FULL_NAME:-}" ] && echo "OK" || echo "PARCIAL"
+  if [ -n "${WOFFY_FULL_NAME:-}" ]; then
+    echo "OK"
+  else
+    echo "PARCIAL"
+  fi
 }
 
 # 
@@ -788,7 +767,9 @@ upsert_config_key() {
   local value="$2"
   local tmp
   tmp="$(mktemp)"
-  [ -f "$CONFIG_FILE" ] && grep -v "^${key}=" "$CONFIG_FILE" > "$tmp" || true
+  if [ -f "$CONFIG_FILE" ]; then
+    grep -v "^${key}=" "$CONFIG_FILE" > "$tmp" || true
+  fi
   write_kv_line "$key" "$value" >> "$tmp"
   mv "$tmp" "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE" 2>/dev/null || true
@@ -869,11 +850,12 @@ show_changelog() {
   local remote local_v remote_v
   local_v="$VERSION"
   echo "Versión local: $local_v"
-  remote="$(curl -fsSL "${UPDATE_RAW_BASE}/woffy.sh" 2>/dev/null || true)"
+  remote="$(curl -fsSL "${REPO_RAW_BASE}/woffy.sh" 2>/dev/null || true)"
   if [ -z "$remote" ]; then
     echo "⚠️ No se pudo consultar versión remota."
     return 0
   fi
+  # shellcheck disable=SC2016
   remote_v="$(echo "$remote" | awk -F'"' '/^VERSION=/{print $2; exit}')"
   [ -z "$remote_v" ] && remote_v="desconocida"
   echo "Versión remota: $remote_v"
@@ -994,8 +976,8 @@ case "${1:-}" in
       EMAIL="$2"
       PASS="$3"
     else
-      read -p "Correo: " EMAIL
-      read -s -p "Contraseña: " PASS
+      read -r -p "Correo: " EMAIL
+      read -r -s -p "Contraseña: " PASS
       echo
     fi
 
@@ -1077,10 +1059,10 @@ case "${1:-}" in
     CUR_THREAD="${TG_THREAD:-}"
     CUR_NOTIFY="${TG_NOTIFY:-all}"
 
-    read -p "Token Bot [${CUR_TG_TOKEN:+ya configurado}]: " TG
-    read -p "Chat ID [${CUR_CHAT_ID:+ya configurado}]: " CHAT
-    read -p "Thread ID (opcional) [${CUR_THREAD:-none}]: " THREAD
-    read -p "Notify (all|errors|success) [$CUR_NOTIFY]: " NOTIFY
+    read -r -p "Token Bot [${CUR_TG_TOKEN:+ya configurado}]: " TG
+    read -r -p "Chat ID [${CUR_CHAT_ID:+ya configurado}]: " CHAT
+    read -r -p "Thread ID (opcional) [${CUR_THREAD:-none}]: " THREAD
+    read -r -p "Notify (all|errors|success) [$CUR_NOTIFY]: " NOTIFY
 
     TG="${TG:-$CUR_TG_TOKEN}"
     CHAT="${CHAT:-$CUR_CHAT_ID}"
@@ -1093,10 +1075,12 @@ case "${1:-}" in
 
     tmp="$(mktemp)"
     grep -v '^TG_' "$CONFIG_FILE" 2>/dev/null > "$tmp" || true
-    [ -n "$TG" ] && write_kv_line "TG_TOKEN" "$TG" >> "$tmp"
-    [ -n "$CHAT" ] && write_kv_line "TG_CHAT_ID" "$CHAT" >> "$tmp"
-    [ -n "$THREAD" ] && write_kv_line "TG_THREAD" "$THREAD" >> "$tmp"
-    write_kv_line "TG_NOTIFY" "$NOTIFY" >> "$tmp"
+    {
+      [ -n "$TG" ] && write_kv_line "TG_TOKEN" "$TG"
+      [ -n "$CHAT" ] && write_kv_line "TG_CHAT_ID" "$CHAT"
+      [ -n "$THREAD" ] && write_kv_line "TG_THREAD" "$THREAD"
+      write_kv_line "TG_NOTIFY" "$NOTIFY"
+    } >> "$tmp"
     mv "$tmp" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
@@ -1136,7 +1120,9 @@ case "${1:-}" in
 
   report)
     check_deps awk date
-    [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config" && safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
+      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    fi
     REPORT_FROM="$(current_week_start_date)"
     REPORT_TO="$(date '+%Y-%m-%d')"
     REPORT_FORMAT="text"
@@ -1207,7 +1193,9 @@ case "${1:-}" in
 
   notify)
     check_deps curl
-    [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config" && safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
+      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    fi
     if [ "${2:-}" != "test" ]; then
       echo "Uso: woffy notify test {success|warning|error|info|all} [mensaje]"
       exit 1
@@ -1235,7 +1223,9 @@ case "${1:-}" in
 
   self-test)
     check_deps curl jq awk date
-    [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config" && safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
+      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    fi
     self_test || exit 1
     ;;
 
@@ -1282,11 +1272,6 @@ case "${1:-}" in
     fi
     UPDATE_RAW_BASE="https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/$UPDATE_BRANCH"
 
-    HC="$(hash_cmd)"
-    if [ -z "$HC" ]; then
-      echo "ERROR Falta herramienta de hash (sha256sum/shasum/openssl)."
-      exit 1
-    fi
     BIN_PATH="$(get_bin_path)"
   
     if [ -z "$BIN_PATH" ]; then
@@ -1295,7 +1280,6 @@ case "${1:-}" in
     fi
   
     TMP="$(mktemp)"
-    TMP_SUM="$(mktemp)"
     echo "INFO Descargando version '$UPDATE_BRANCH' de woffy..."
   
     if ! curl -fsSL "${UPDATE_RAW_BASE}/woffy.sh" -o "$TMP"; then
@@ -1304,22 +1288,6 @@ case "${1:-}" in
       exit 1
     fi
 
-    if ! curl -fsSL "${UPDATE_RAW_BASE}/woffy.sh.sha256" -o "$TMP_SUM"; then
-      echo "ERROR Error descargando checksum de la actualizacion"
-      rm -f "$TMP" "$TMP_SUM"
-      exit 1
-    fi
-
-    EXPECTED_HASH="$(awk '{print $1}' "$TMP_SUM" | head -n1)"
-    ACTUAL_HASH="$(sha256_file "$TMP" || echo "")"
-    if [ -z "$EXPECTED_HASH" ] || [ -z "$ACTUAL_HASH" ] || [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
-      echo "ERROR Verificacion SHA256 fallida. Actualizacion cancelada."
-      log "Checksum update mismatch. expected=$EXPECTED_HASH actual=$ACTUAL_HASH"
-      rm -f "$TMP" "$TMP_SUM"
-      exit 1
-    fi
-    rm -f "$TMP_SUM"
-  
     chmod +x "$TMP"
     mv "$TMP" "$BIN_PATH"
   
@@ -1345,17 +1313,29 @@ EOF
     echo "🩺 Diagnóstico woffy v$VERSION"
     echo
     echo "Sistema"
+    if [ -f "$CONFIG_FILE" ]; then
+      config_state="OK"
+    else
+      config_state="NO"
+    fi
+    if [ -d "$LOCK_DIR" ]; then
+      lock_state="ACTIVO"
+    else
+      lock_state="libre"
+    fi
     echo "  Bin:     $(get_bin_path)"
-    echo "  Config:  $( [ -f "$CONFIG_FILE" ] && echo OK || echo NO )"
+    echo "  Config:  $config_state"
     echo "  Deps:    OK"
-    echo "  Lock:    $( [ -d "$LOCK_DIR" ] && echo ACTIVO || echo libre )"
+    echo "  Lock:    $lock_state"
     echo
     echo "Autenticación"
     echo "  Token:   $(token_status_human)"
     echo
     echo "Usuario"
     if [ -f "$USER_FILE" ]; then
-      validate_kv_file "$USER_FILE" "user" && safe_source_file "$USER_FILE" "user" 2>/dev/null || true
+      if validate_kv_file "$USER_FILE" "user"; then
+        safe_source_file "$USER_FILE" "user" 2>/dev/null || true
+      fi
       echo "  Ficha:   OK"
       echo "  Nombre:  ${WOFFY_FULL_NAME:-?}"
       echo "  Empresa: ${WOFFY_COMPANY_NAME:-?}"
@@ -1370,8 +1350,10 @@ EOF
     fi
 
     echo "User:    $(user_card_summary)"
-    if [ -f "$USER_FILE" ]; then
-      validate_kv_file "$USER_FILE" "user" && safe_source_file "$USER_FILE" "user" 2>/dev/null || true
+    if [ -f "$USER_FILE" ]; then
+      if validate_kv_file "$USER_FILE" "user"; then
+        safe_source_file "$USER_FILE" "user" 2>/dev/null || true
+      fi
       [ -n "${WOFFY_FULL_NAME:-}" ] && echo "Nombre:  $WOFFY_FULL_NAME"
       [ -n "${WOFFY_EMAIL:-}" ] && echo "Email:   $WOFFY_EMAIL"
       [ -n "${WOFFY_COMPANY_NAME:-}" ] && echo "Empresa: $WOFFY_COMPANY_NAME"
@@ -1398,7 +1380,9 @@ EOF
 
   schedule)
     check_deps crontab readlink
-    [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config" && safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
+      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    fi
     SCRIPT_PATH="$(get_script_path)"
     SCRIPT_PATH_ESCAPED="$(printf '%q' "$SCRIPT_PATH")"
     TZ_LINE=""
@@ -1534,7 +1518,7 @@ EOF
     echo "    - Ficha de usuario"
     echo "    - Entradas de cron"
     echo
-    read -p "Seguro que quieres continuar? (s/N): " CONFIRM
+    read -r -p "Seguro que quieres continuar? (s/N): " CONFIRM
 
     case "$CONFIRM" in
       s|S|y|Y) ;;
@@ -1563,17 +1547,6 @@ EOF
     exit 1
     ;;
 esac
-
-
-
-
-
-
-
-
-
-
-
 
 
 
