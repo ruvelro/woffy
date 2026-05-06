@@ -915,7 +915,9 @@ restore_files() {
   ensure_home
   tar -xzf "$in" -C "$WOFFY_HOME" >/dev/null 2>&1 || return 1
   chmod 700 "$WOFFY_HOME" 2>/dev/null || true
-  [ -f "$DB_FILE" ] && chmod 600 "$DB_FILE" 2>/dev/null || true
+  if [ -f "$DB_FILE" ]; then
+    chmod 600 "$DB_FILE" 2>/dev/null || true
+  fi
 }
 
 clear_woffy_cron() {
@@ -1168,7 +1170,9 @@ case "${1:-}" in
     EVENTS_FORMAT="text"
     EVENTS_LIMIT=200
     shift || true
-    [ "$#" -gt 0 ] && shift || true
+    if [ "$#" -gt 0 ]; then
+      shift
+    fi
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --days)
@@ -1315,24 +1319,24 @@ case "${1:-}" in
             print_user_schedule "$EMAIL"
             ;;
           add)
-            [ -n "${5:-}" ] && [ -n "${6:-}" ] || {
+            if [ -z "${5:-}" ] || [ -z "${6:-}" ]; then
               echo "Usage: woffy schedule user <email> add {in|out} HH:MM [weekdays]"
               exit 1
-            }
+            fi
             add_user_schedule "$EMAIL" "$5" "$6" "${7:-1,2,3,4,5}"
             ;;
           set)
-            [ -n "${5:-}" ] && [ -n "${6:-}" ] || {
+            if [ -z "${5:-}" ] || [ -z "${6:-}" ]; then
               echo "Usage: woffy schedule user <email> set {in|out} HH:MM[,HH:MM...] [weekdays]"
               exit 1
-            }
+            fi
             set_user_schedule "$EMAIL" "$5" "$6" "${7:-1,2,3,4,5}"
             ;;
           remove)
-            [ -n "${5:-}" ] && [ -n "${6:-}" ] || {
+            if [ -z "${5:-}" ] || [ -z "${6:-}" ]; then
               echo "Usage: woffy schedule user <email> remove {in|out} HH:MM"
               exit 1
-            }
+            fi
             remove_user_schedule "$EMAIL" "$5" "$6"
             ;;
           clear)
