@@ -34,7 +34,7 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
       echo ""
       echo "# Added by woffy"
       echo "export PATH=\"\$HOME/.local/bin:\$PATH\""
-    } >> "$SHELL_RC"
+    } >>"$SHELL_RC"
     echo "Restart the terminal or run: source $SHELL_RC"
   else
     echo "Could not detect shell. Add ~/.local/bin to PATH manually."
@@ -49,9 +49,7 @@ fi
 echo "Cleaning previous woffy entries in crontab..."
 "$INSTALL_PATH" schedule clear || true
 
-echo "Scheduling default times..."
-"$INSTALL_PATH" schedule entrada || true
-"$INSTALL_PATH" schedule salida || true
-"$INSTALL_PATH" schedule report || true
+echo "Scheduling multi-user orchestrator..."
+"$INSTALL_PATH" schedule install || true
 
 echo "Install complete. Run: woffy help"

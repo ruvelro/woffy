@@ -1,39 +1,58 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="2.0.0"
 
-# Rutas
-CONFIG_FILE="$HOME/.woffy.conf"
-TOKEN_FILE="$HOME/.woffy.token"
-LOG_FILE="$HOME/.woffy.log"
-LOCK_DIR="$HOME/.woffy.lock.d"
-USER_FILE="$HOME/.woffy.user"
-
+WOFFY_HOME="${WOFFY_HOME:-$HOME/.woffy}"
+DB_FILE="${WOFFY_DB_FILE:-$WOFFY_HOME/woffy.db}"
+LOG_FILE="${WOFFY_LOG_FILE:-$WOFFY_HOME/woffy.log}"
+LOCK_DIR="${WOFFY_LOCK_DIR:-$WOFFY_HOME/woffy.lock.d}"
 API_URL="https://app.woffu.com"
 REPO_RAW_BASE="https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main"
 
 NO_TELEGRAM=false
+QUIET=false
 
-# Global flags
 if [ "$#" -gt 0 ]; then
   FILTERED_ARGS=()
   for arg in "$@"; do
     case "$arg" in
       --no-telegram) NO_TELEGRAM=true ;;
+      --quiet) QUIET=true ;;
       *) FILTERED_ARGS+=("$arg") ;;
     esac
   done
   set -- "${FILTERED_ARGS[@]}"
 fi
 
-# 
-# Utils
-# 
 LOG_MAX_BYTES_DEFAULT=1048576
 LOG_MAX_FILES_DEFAULT=5
 
 is_int() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+sql_quote() {
+  local value="${1-}"
+  value="${value//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
+check_deps() {
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 || {
+      echo "ERROR Missing required dependency: $cmd"
+      exit 1
+    }
+  done
+}
+
+ensure_home() {
+  mkdir -p "$WOFFY_HOME"
+  chmod 700 "$WOFFY_HOME" 2>/dev/null || true
+}
 
 rotate_log_if_needed() {
   [ -f "$LOG_FILE" ] || return 0
@@ -43,7 +62,7 @@ rotate_log_if_needed() {
   is_int "$max_bytes" || max_bytes="$LOG_MAX_BYTES_DEFAULT"
   is_int "$max_files" || max_files="$LOG_MAX_FILES_DEFAULT"
   [ "$max_files" -lt 1 ] && max_files=1
-  size="$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)"
+  size="$(wc -c <"$LOG_FILE" 2>/dev/null || echo 0)"
   is_int "$size" || size=0
   [ "$size" -lt "$max_bytes" ] && return 0
 
@@ -55,119 +74,130 @@ rotate_log_if_needed() {
     i=$((i - 1))
   done
   mv -f "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null || true
-  : > "$LOG_FILE"
+  : >"$LOG_FILE"
 }
 
 log() {
+  ensure_home
   rotate_log_if_needed
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null || true
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >>"$LOG_FILE" 2>/dev/null || true
 }
 
-check_deps() {
-  for cmd in "$@"; do
-    command -v "$cmd" >/dev/null 2>&1 || {
-      echo "❌ Falta dependencia crítica: $cmd"
-      exit 1
+db_exec() {
+  sqlite3 "$DB_FILE" "$1"
+}
+
+db_init() {
+  check_deps sqlite3
+  ensure_home
+  sqlite3 "$DB_FILE" <<'SQL'
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS settings(
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS users(
+  email TEXT PRIMARY KEY,
+  password TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tokens(
+  email TEXT PRIMARY KEY,
+  token TEXT,
+  expires_at INTEGER,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(email) REFERENCES users(email) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS user_cards(
+  email TEXT PRIMARY KEY,
+  woffu_user_id TEXT,
+  full_name TEXT,
+  company_name TEXT,
+  office_name TEXT,
+  schedule_name TEXT,
+  raw_json TEXT,
+  fetched_at TEXT NOT NULL,
+  FOREIGN KEY(email) REFERENCES users(email) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS schedules(
+  email TEXT NOT NULL,
+  action TEXT NOT NULL CHECK(action IN ('in','out')),
+  time_hhmm TEXT NOT NULL,
+  weekdays TEXT NOT NULL DEFAULT '1,2,3,4,5',
+  active INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(email, action, time_hhmm),
+  FOREIGN KEY(email) REFERENCES users(email) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT,
+  action TEXT,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_guard(
+  email TEXT NOT NULL,
+  action TEXT NOT NULL,
+  run_date TEXT NOT NULL,
+  time_hhmm TEXT NOT NULL,
+  PRIMARY KEY(email, action, run_date, time_hhmm)
+);
+SQL
+  chmod 600 "$DB_FILE" 2>/dev/null || true
+}
+
+settings_get() {
+  db_init
+  db_exec "SELECT value FROM settings WHERE key=$(sql_quote "$1") LIMIT 1;"
+}
+
+settings_set() {
+  db_init
+  db_exec "INSERT INTO settings(key,value) VALUES($(sql_quote "$1"),$(sql_quote "$2"))
+           ON CONFLICT(key) DO UPDATE SET value=excluded.value;"
+}
+
+load_telegram_settings() {
+  TG_TOKEN="$(settings_get TG_TOKEN 2>/dev/null || true)"
+  TG_CHAT_ID="$(settings_get TG_CHAT_ID 2>/dev/null || true)"
+  TG_THREAD="$(settings_get TG_THREAD 2>/dev/null || true)"
+  TG_NOTIFY="$(settings_get TG_NOTIFY 2>/dev/null || true)"
+  TG_NOTIFY="${TG_NOTIFY:-all}"
+}
+
+tg_send() {
+  [ "$NO_TELEGRAM" = "true" ] && return 0
+  load_telegram_settings
+  [ -z "${TG_TOKEN:-}" ] && return 0
+  [ -z "${TG_CHAT_ID:-}" ] && return 0
+
+  local type="$1"
+  local msg="$2"
+  local force="${3:-false}"
+
+  if [ "$force" != "true" ]; then
+    case "${TG_NOTIFY:-all}" in
+      all) ;;
+      errors) [ "$type" != "error" ] && return 0 ;;
+      success) [ "$type" != "success" ] && return 0 ;;
+      *) ;;
+    esac
+  fi
+
+  local curl_args
+  curl_args=(-s --max-time 10 -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID" -d "text=$msg")
+  if [ -n "${TG_THREAD:-}" ]; then
+    [[ "$TG_THREAD" =~ ^-?[0-9]+$ ]] || {
+      log "Invalid TG_THREAD. It must be numeric."
+      return 0
     }
-  done
-}
-
-write_kv_line() {
-  local key="$1"
-  local value="${2-}"
-  printf '%s=%q\n' "$key" "$value"
-}
-
-date_days_ago() {
-  local days="$1"
-  if date -d "$days days ago" "+%Y-%m-%d %H:%M:%S" >/dev/null 2>&1; then
-    date -d "$days days ago" "+%Y-%m-%d %H:%M:%S"
-  else
-    date -v-"$days"d "+%Y-%m-%d %H:%M:%S"
+    curl_args+=(-d "message_thread_id=$TG_THREAD")
   fi
-}
-
-current_week_start_date() {
-  local dow offset
-  dow="$(date '+%u' 2>/dev/null || echo 1)"
-  offset=$((dow - 1))
-  if [ "$offset" -eq 0 ]; then
-    date "+%Y-%m-%d"
-    return
-  fi
-  if date -d "today -$offset days" "+%Y-%m-%d" >/dev/null 2>&1; then
-    date -d "today -$offset days" "+%Y-%m-%d"
-  else
-    date -v-"$offset"d "+%Y-%m-%d"
-  fi
-}
-
-is_valid_date() {
-  [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
-}
-
-date_to_boundary() {
-  local day="$1"
-  local mode="${2:-start}" # start|end
-  if [ "$mode" = "end" ]; then
-    echo "$day 23:59:59"
-  else
-    echo "$day 00:00:00"
-  fi
-}
-
-json_escape() {
-  echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
-}
-
-validate_kv_file() {
-  local file="$1"
-  local kind="$2"
-  local line key val
-  [ -f "$file" ] || return 0
-
-  while IFS= read -r line || [ -n "$line" ]; do
-    line="${line%$'\r'}"
-    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || return 1
-    key="${line%%=*}"
-    val="${line#*=}"
-
-    case "$kind" in
-      config)
-        [[ "$key" =~ ^(WURL_USER|WURL_PASS|TG_TOKEN|TG_CHAT_ID|TG_THREAD|TG_NOTIFY|WOFFY_TZ|WOFFY_LOG_MAX_BYTES|WOFFY_LOG_MAX_FILES)$ ]] || return 1
-        ;;
-      token)
-        [[ "$key" =~ ^(WOFFY_TOKEN|WOFFY_TOKEN_EXP)$ ]] || return 1
-        ;;
-      user)
-        [[ "$key" =~ ^(WOFFY_USER_VERSION|WOFFY_USER_FETCHED_AT|WOFFY_USER_ID|WOFFY_USER_NUMBER|WOFFY_FULL_NAME|WOFFY_EMAIL|WOFFY_COMPANY_ID|WOFFY_COMPANY_NAME|WOFFY_OFFICE_NAME|WOFFY_SCHEDULE_NAME)$ ]] || return 1
-        ;;
-      *)
-        return 1
-        ;;
-    esac
-
-    case "$val" in
-      *\$\(*|*'`'*|*';'*|*'|'*|*'&'*|*'<'*|*'>'*)
-        return 1
-        ;;
-    esac
-  done < "$file"
-
-  return 0
-}
-
-safe_source_file() {
-  local file="$1"
-  local kind="$2"
-  validate_kv_file "$file" "$kind" || {
-    echo "❌ Archivo invalido o inseguro: $file"
-    log "Archivo bloqueado por validacion: $file ($kind)"
-    exit 1
-  }
-  # shellcheck disable=SC1090
-  source "$file"
+  curl "${curl_args[@]}" >/dev/null || log "Error sending Telegram message"
 }
 
 get_bin_path() { command -v woffy 2>/dev/null || true; }
@@ -184,180 +214,332 @@ get_script_path() {
 }
 
 acquire_lock() {
+  ensure_home
   if mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "$$" > "$LOCK_DIR/pid"
+    echo "$$" >"$LOCK_DIR/pid"
     trap 'rm -rf "$LOCK_DIR"' EXIT
-    return
+    return 0
   fi
 
   local dir_pid
   dir_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")"
   if [ -n "$dir_pid" ] && kill -0 "$dir_pid" 2>/dev/null; then
-    log "Lock activo (PID $dir_pid). Abortando ejecución concurrente."
+    log "Active lock (PID $dir_pid). Skipping concurrent run."
     exit 0
   fi
 
   rm -rf "$LOCK_DIR"
-  if mkdir "$LOCK_DIR" 2>/dev/null; then
-    echo "$$" > "$LOCK_DIR/pid"
-    trap 'rm -rf "$LOCK_DIR"' EXIT
-    return
-  fi
-
-  log "No se pudo adquirir lock atómico."
-  exit 1
+  mkdir "$LOCK_DIR" 2>/dev/null || {
+    log "Could not acquire lock."
+    exit 1
+  }
+  echo "$$" >"$LOCK_DIR/pid"
+  trap 'rm -rf "$LOCK_DIR"' EXIT
 }
 
-# 
-# Telegram
-# 
-tg_send() {
-  [ "$NO_TELEGRAM" = "true" ] && return
-  [ -z "${TG_TOKEN:-}" ] && return
-  [ -z "${TG_CHAT_ID:-}" ] && return
-
-  local TYPE="$1"  # error | success | info | test
-  local MSG="$2"
-  local FORCE="${3:-false}"
-
-  if [ "$FORCE" != "true" ]; then
-    case "${TG_NOTIFY:-all}" in
-      all) ;;
-      errors)  [ "$TYPE" != "error" ] && return ;;
-      success) [ "$TYPE" != "success" ] && return ;;
-      *) ;;
-    esac
+fmt_epoch() {
+  local epoch="$1"
+  if date -d "@$epoch" "+%Y-%m-%d %H:%M" >/dev/null 2>&1; then
+    date -d "@$epoch" "+%Y-%m-%d %H:%M"
+  else
+    date -r "$epoch" "+%Y-%m-%d %H:%M"
   fi
+}
 
-  local curl_args
-  curl_args=(-s --max-time 10 -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID" -d "text=$MSG")
-  if [ -n "${TG_THREAD:-}" ]; then
-    [[ "${TG_THREAD:-}" =~ ^-?[0-9]+$ ]] || {
-      log "TG_THREAD invalido. Debe ser numerico."
-      return
+is_valid_date() {
+  [[ "$1" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+}
+
+validate_time() {
+  [[ "$1" =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]
+}
+
+validate_action() {
+  [ "$1" = "in" ] || [ "$1" = "out" ]
+}
+
+validate_weekdays() {
+  [[ "$1" =~ ^[1-7](,[1-7])*$ ]]
+}
+
+date_to_boundary() {
+  local day="$1"
+  local mode="${2:-start}"
+  if [ "$mode" = "end" ]; then
+    echo "$day 23:59:59"
+  else
+    echo "$day 00:00:00"
+  fi
+}
+
+current_week_start_date() {
+  local dow offset
+  dow="$(date '+%u' 2>/dev/null || echo 1)"
+  offset=$((dow - 1))
+  if [ "$offset" -eq 0 ]; then
+    date "+%Y-%m-%d"
+  elif date -d "today -$offset days" "+%Y-%m-%d" >/dev/null 2>&1; then
+    date -d "today -$offset days" "+%Y-%m-%d"
+  else
+    date -v-"$offset"d "+%Y-%m-%d"
+  fi
+}
+
+user_exists_active() {
+  local email="$1"
+  local count
+  db_init
+  count="$(db_exec "SELECT COUNT(*) FROM users WHERE email=$(sql_quote "$email") AND active=1;")"
+  [ "$count" = "1" ]
+}
+
+user_exists() {
+  local email="$1"
+  local count
+  db_init
+  count="$(db_exec "SELECT COUNT(*) FROM users WHERE email=$(sql_quote "$email");")"
+  [ "$count" = "1" ]
+}
+
+user_password() {
+  db_init
+  db_exec "SELECT password FROM users WHERE email=$(sql_quote "$1") LIMIT 1;"
+}
+
+user_full_name() {
+  db_init
+  db_exec "SELECT COALESCE(full_name,'') FROM user_cards WHERE email=$(sql_quote "$1") LIMIT 1;"
+}
+
+record_event() {
+  local email="$1"
+  local action="$2"
+  local kind="$3"
+  local status="$4"
+  local message="$5"
+  db_init
+  db_exec "INSERT INTO events(email,action,kind,status,message,created_at)
+           VALUES($(sql_quote "$email"),$(sql_quote "$action"),$(sql_quote "$kind"),$(sql_quote "$status"),$(sql_quote "$message"),datetime('now','localtime'));"
+  log "$email | $action | $status | $message"
+}
+
+seed_default_schedule() {
+  local email="$1"
+  db_init
+  db_exec "INSERT OR IGNORE INTO schedules(email, action, time_hhmm, weekdays) VALUES
+           ($(sql_quote "$email"), 'in', '09:00', '1,2,3,4,5'),
+           ($(sql_quote "$email"), 'in', '15:30', '1,2,3,4,5'),
+           ($(sql_quote "$email"), 'out', '14:00', '1,2,3,4,5'),
+           ($(sql_quote "$email"), 'out', '18:00', '1,2,3,4,5');"
+}
+
+print_users() {
+  db_init
+  db_exec "SELECT users.email || char(9) || COALESCE(user_cards.full_name,'') || char(9) || CASE users.active WHEN 1 THEN 'active' ELSE 'inactive' END
+           FROM users LEFT JOIN user_cards ON user_cards.email=users.email
+           ORDER BY users.email;" |
+    awk 'BEGIN{FS="\t"; printf "%-34s %-30s %s\n","EMAIL","NAME","STATUS"} {printf "%-34s %-30s %s\n",$1,$2,$3}'
+}
+
+set_user_active() {
+  local email="$1"
+  local active="$2"
+  user_exists "$email" || {
+    echo "ERROR Unknown user: $email"
+    exit 1
+  }
+  db_exec "UPDATE users SET active=$active, updated_at=datetime('now','localtime') WHERE email=$(sql_quote "$email");"
+  if [ "$active" = "1" ]; then
+    record_event "$email" "user" "admin" "success" "User enabled."
+    echo "OK User enabled: $email"
+  else
+    record_event "$email" "user" "admin" "warning" "User disabled."
+    echo "OK User disabled: $email"
+  fi
+}
+
+delete_user() {
+  local email="$1"
+  user_exists "$email" || {
+    echo "ERROR Unknown user: $email"
+    exit 1
+  }
+  db_exec "DELETE FROM run_guard WHERE email=$(sql_quote "$email");
+           DELETE FROM schedules WHERE email=$(sql_quote "$email");
+           DELETE FROM tokens WHERE email=$(sql_quote "$email");
+           DELETE FROM user_cards WHERE email=$(sql_quote "$email");
+           DELETE FROM users WHERE email=$(sql_quote "$email");"
+  record_event "$email" "user" "admin" "warning" "User deleted."
+  echo "OK User deleted: $email"
+}
+
+print_user_schedule() {
+  local email="$1"
+  user_exists "$email" || {
+    echo "ERROR Unknown user: $email"
+    exit 1
+  }
+  db_exec "SELECT action || char(9) || time_hhmm || char(9) || weekdays || char(9) || CASE active WHEN 1 THEN 'active' ELSE 'inactive' END
+           FROM schedules
+           WHERE email=$(sql_quote "$email")
+           ORDER BY action, time_hhmm;" |
+    awk 'BEGIN{FS="\t"; printf "%-6s %-6s %-13s %s\n","ACTION","TIME","WEEKDAYS","STATUS"} {printf "%-6s %-6s %-13s %s\n",$1,$2,$3,$4}'
+}
+
+add_user_schedule() {
+  local email="$1"
+  local action="$2"
+  local time="$3"
+  local weekdays="${4:-1,2,3,4,5}"
+  user_exists "$email" || {
+    echo "ERROR Unknown user: $email"
+    exit 1
+  }
+  validate_action "$action" || {
+    echo "ERROR Invalid action: $action"
+    exit 1
+  }
+  validate_time "$time" || {
+    echo "ERROR Invalid time: $time"
+    exit 1
+  }
+  validate_weekdays "$weekdays" || {
+    echo "ERROR Invalid weekdays: $weekdays"
+    exit 1
+  }
+  db_exec "INSERT INTO schedules(email, action, time_hhmm, weekdays, active)
+           VALUES($(sql_quote "$email"),$(sql_quote "$action"),$(sql_quote "$time"),$(sql_quote "$weekdays"),1)
+           ON CONFLICT(email, action, time_hhmm) DO UPDATE SET weekdays=excluded.weekdays, active=1;"
+  record_event "$email" "schedule" "admin" "success" "Schedule added: $action $time weekdays=$weekdays."
+  echo "OK Schedule added for $email: $action $time ($weekdays)"
+}
+
+remove_user_schedule() {
+  local email="$1"
+  local action="$2"
+  local time="$3"
+  user_exists "$email" || {
+    echo "ERROR Unknown user: $email"
+    exit 1
+  }
+  validate_action "$action" || {
+    echo "ERROR Invalid action: $action"
+    exit 1
+  }
+  validate_time "$time" || {
+    echo "ERROR Invalid time: $time"
+    exit 1
+  }
+  db_exec "DELETE FROM schedules WHERE email=$(sql_quote "$email") AND action=$(sql_quote "$action") AND time_hhmm=$(sql_quote "$time");"
+  record_event "$email" "schedule" "admin" "warning" "Schedule removed: $action $time."
+  echo "OK Schedule removed for $email: $action $time"
+}
+
+set_user_schedule() {
+  local email="$1"
+  local action="$2"
+  local times_csv="$3"
+  local weekdays="${4:-1,2,3,4,5}"
+  local time
+  user_exists "$email" || {
+    echo "ERROR Unknown user: $email"
+    exit 1
+  }
+  validate_action "$action" || {
+    echo "ERROR Invalid action: $action"
+    exit 1
+  }
+  validate_weekdays "$weekdays" || {
+    echo "ERROR Invalid weekdays: $weekdays"
+    exit 1
+  }
+  db_exec "DELETE FROM schedules WHERE email=$(sql_quote "$email") AND action=$(sql_quote "$action");"
+  IFS=',' read -ra TIMES <<<"$times_csv"
+  for time in "${TIMES[@]}"; do
+    validate_time "$time" || {
+      echo "ERROR Invalid time: $time"
+      exit 1
     }
-    curl_args+=(-d "message_thread_id=$TG_THREAD")
-  fi
-
-  curl "${curl_args[@]}" > /dev/null || log "Error enviando a Telegram"
+    db_exec "INSERT INTO schedules(email, action, time_hhmm, weekdays, active)
+             VALUES($(sql_quote "$email"),$(sql_quote "$action"),$(sql_quote "$time"),$(sql_quote "$weekdays"),1);"
+  done
+  record_event "$email" "schedule" "admin" "success" "Schedule set: $action $times_csv weekdays=$weekdays."
+  echo "OK Schedule set for $email: $action $times_csv ($weekdays)"
 }
 
-# 
-# Cargar config cuando haga falta
-# 
-need_config=true
-case "${1:-}" in
-  help|version|login|uninstall|schedule|report|update|backup|restore|changelog|self-test|notify|config|"")
-    need_config=false
-    ;;
-esac
+clear_user_schedule() {
+  local email="$1"
+  user_exists "$email" || {
+    echo "ERROR Unknown user: $email"
+    exit 1
+  }
+  db_exec "DELETE FROM schedules WHERE email=$(sql_quote "$email");"
+  record_event "$email" "schedule" "admin" "warning" "All schedules cleared."
+  echo "OK Schedules cleared for $email"
+}
 
-if $need_config; then
-  [ ! -f "$CONFIG_FILE" ] && { echo "❌ Configuración no encontrada. Ejecuta 'woffy login'"; exit 1; }
-  safe_source_file "$CONFIG_FILE" "config"
-fi
+reset_default_schedule() {
+  local email="$1"
+  clear_user_schedule "$email" >/dev/null
+  seed_default_schedule "$email"
+  record_event "$email" "schedule" "admin" "success" "Default schedules restored."
+  echo "OK Default schedules restored for $email"
+}
 
-# 
-# Token
-# 
 get_token() {
-  : "${WURL_USER:?Credenciales no configuradas. Ejecuta 'woffy login'}"
-  : "${WURL_PASS:?Credenciales no configuradas. Ejecuta 'woffy login'}"
-  local now response token expires exp
-  now=$(date +%s)
-
-  if [ -f "$TOKEN_FILE" ]; then
-    if validate_kv_file "$TOKEN_FILE" "token"; then
-      safe_source_file "$TOKEN_FILE" "token" 2>/dev/null || true
-    fi
-    if [ -n "${WOFFY_TOKEN:-}" ] && [ "${WOFFY_TOKEN_EXP:-0}" -gt "$((now + 60))" ]; then
-      echo "$WOFFY_TOKEN"
-      return
-    fi
+  local email="$1"
+  local now token exp password response expires
+  db_init
+  user_exists_active "$email" || {
+    echo "ERROR Unknown or inactive user: $email"
+    exit 1
+  }
+  now="$(date +%s)"
+  token="$(db_exec "SELECT COALESCE(token,'') FROM tokens WHERE email=$(sql_quote "$email") AND expires_at > $((now + 60)) LIMIT 1;")"
+  if [ -n "$token" ]; then
+    echo "$token"
+    return 0
   fi
 
-  log "Renovando token OAuth..."
+  password="$(user_password "$email")"
+  log "Refreshing OAuth token for $email"
   response="$(curl -s -X POST "$API_URL/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "grant_type=password" \
-  --data-urlencode "username=$WURL_USER" \
-  --data-urlencode "password=$WURL_PASS" || true)"
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "grant_type=password" \
+    --data-urlencode "username=$email" \
+    --data-urlencode "password=$password" || true)"
 
-  token="$(echo "$response" | jq -r .access_token 2>/dev/null || echo "")"
+  token="$(echo "$response" | jq -r '.access_token // empty' 2>/dev/null || echo "")"
   expires="$(echo "$response" | jq -r '.expires_in // 3600' 2>/dev/null || echo "3600")"
 
   if [ -z "$token" ] || [ "$token" = "null" ]; then
-    log "ERROR API Auth: $response"
-    echo "❌ Error autenticando con Woffu"
-    tg_send error "❌ woffy: Credenciales inválidas o error de API."
+    record_event "$email" "auth" "auth" "error" "Woffu authentication failed"
+    echo "ERROR Could not authenticate $email with Woffu"
+    tg_send error "woffy: auth failed for $email"
     exit 1
   fi
 
   exp=$((now + expires - 60))
-  {
-    write_kv_line "WOFFY_TOKEN" "$token"
-    echo "WOFFY_TOKEN_EXP=$exp"
-  } > "$TOKEN_FILE" 2>/dev/null || true
-  chmod 600 "$TOKEN_FILE" 2>/dev/null || true
-
-  log "Token renovado exitosamente."
+  db_exec "INSERT INTO tokens(email, token, expires_at, updated_at)
+           VALUES($(sql_quote "$email"),$(sql_quote "$token"),$exp,datetime('now','localtime'))
+           ON CONFLICT(email) DO UPDATE SET token=excluded.token, expires_at=excluded.expires_at, updated_at=excluded.updated_at;"
   echo "$token"
 }
 
-# Epoch -> fecha/hora portable (GNU/BSD)
-fmt_epoch() {
-  local epoch="$1"
-  if date -d "@$epoch" "+%d/%m/%Y a las %H:%M" >/dev/null 2>&1; then
-    date -d "@$epoch" "+%d/%m/%Y a las %H:%M"
-  else
-    date -r "$epoch" "+%d/%m/%Y a las %H:%M"
-  fi
-}
-
-token_status_human() {
-  [ ! -f "$TOKEN_FILE" ] && { echo "NO"; return; }
-  validate_kv_file "$TOKEN_FILE" "token" || { echo "INVALIDO"; return; }
-  safe_source_file "$TOKEN_FILE" "token" 2>/dev/null || { echo "INVALIDO"; return; }
-  [ -z "${WOFFY_TOKEN_EXP:-}" ] && { echo "INVALIDO"; return; }
-
-  local now exp_h
-  now=$(date +%s)
-  exp_h="$(fmt_epoch "$WOFFY_TOKEN_EXP" 2>/dev/null || echo "")"
-
-  if [ -z "$exp_h" ]; then
-    echo "OK (expira en epoch=$WOFFY_TOKEN_EXP)"
-    return
-  fi
-
-  if [ "$WOFFY_TOKEN_EXP" -le "$now" ]; then
-    echo "EXPIRADO (caducó el $exp_h)"
-  else
-    echo "OK (expira el $exp_h)"
-  fi
-}
-
-# 
-# API core
-# 
 api_get_raw() {
   local path="$1"
   [ -z "${TOKEN:-}" ] && return 1
-  curl -fsS --max-time 15 \
-    -H "Authorization: Bearer $TOKEN" \
-    "$API_URL$path"
+  curl -fsS --max-time 15 -H "Authorization: Bearer $TOKEN" "$API_URL$path"
 }
 
 get_status() {
-  local body="" signin=""
-
+  local body signin
   if ! body="$(api_get_raw "/api/signs" 2>/dev/null)"; then
-    log "Error accediendo a /api/signs"
     echo "unknown"
     return 0
   fi
 
   if ! echo "$body" | jq -e 'type=="array"' >/dev/null 2>&1; then
-    log "JSON inesperado en /api/signs"
     echo "unknown"
     return 0
   fi
@@ -370,256 +552,75 @@ get_status() {
         and (.SignIn == true or .SignIn == false)
       ))
       | sort_by(.TrueDate // .Date)
-      | if length == 0 then "out"
-        else last.SignIn
-        end
+      | if length == 0 then "out" else last.SignIn end
     '
   )"
 
   case "$signin" in
-    true|1|in)   echo "in"  ;;
-    false|0|out) echo "out" ;;
-    *)           echo "unknown" ;;
+    true | 1 | in) echo "in" ;;
+    false | 0 | out) echo "out" ;;
+    *) echo "unknown" ;;
   esac
 }
-
 
 post_sign() {
   local action="$1"
   local now json_data resp status_code body
-
-  now=$(date -Iseconds)
-
-  # shellcheck disable=SC2016
-  json_data="$(jq -nc --arg date "$now" --arg action "$action" \
-    '{signType:0, date:$date, action:$action}')"
-
+  now="$(date -Iseconds)"
+  json_data="$(jq -nc --arg date "$now" --arg action "$action" '{signType:0, date:$date, action:$action}')"
   resp="$(curl -s -w "\n%{http_code}" -X POST "$API_URL/api/signs" \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d "$json_data" || true)"
-
   status_code="$(echo "$resp" | tail -n1)"
-  # shellcheck disable=SC2016
   body="$(echo "$resp" | sed '$d')"
-
   if [[ "$status_code" =~ ^2 ]]; then
     return 0
-  else
-    log "Error API Sign ($action): HTTP $status_code | $body"
-    return 1
   fi
-}
-
-run_sign_flow() {
-  local mode="$1"          # in | out
-  local dry_run="${2:-false}"
-  local st wd reason action msg
-
-  st="$(get_status)"
-  log "Solicitud: $mode | Estado actual: $st | DryRun=$dry_run"
-
-  if [ "$st" = "unknown" ]; then
-    msg="⚠️ No se puede determinar el estado actual. Abortando por seguridad."
-    echo "$msg"
-    tg_send error "$msg"
-    return 1
-  fi
-
-  if [ "$mode" = "in" ] && [ "$st" = "in" ]; then
-    msg="⚠️ No ficho IN: ya estabas DENTRO."
-    echo "$msg"
-    log "$msg"
-    tg_send error "$msg"
-    return 0
-  fi
-
-  if [ "$mode" = "out" ] && [ "$st" = "out" ]; then
-    msg="⚠️ No ficho OUT: ya estabas FUERA."
-    echo "$msg"
-    log "$msg"
-    tg_send error "$msg"
-    return 0
-  fi
-
-  if [ "$mode" = "in" ]; then
-    wd="$(get_workday)"
-    if [ -n "$wd" ] && ! is_workday_ok_for_in "$wd"; then
-      reason="$(workday_reason "$wd")"
-      [ -z "$reason" ] && reason="día no laborable"
-      msg="⚠️ No se ficha entrada: $reason."
-      echo "$msg"
-      log "$msg"
-      tg_send error "$msg"
-      return 0
-    fi
-  fi
-
-  if [ "$dry_run" = "true" ]; then
-    msg="ℹ️ DRY-RUN: se ficharía '$mode' ahora."
-    echo "$msg"
-    log "$msg"
-    tg_send info "$msg"
-    return 0
-  fi
-
-  action="clock_in"
-  [ "$mode" = "out" ] && action="clock_out"
-
-  local max_retries retry_delay attempt success
-  max_retries=4
-  retry_delay=15
-  attempt=1
-  success=false
-
-  while [ "$attempt" -le "$max_retries" ]; do
-    if post_sign "$action"; then
-      success=true
-      break
-    fi
-
-    log "Intento $attempt/$max_retries fallido al fichar $mode."
-    if [ "$attempt" -lt "$max_retries" ]; then
-      log "Reintentando en ${retry_delay}s..."
-      sleep "$retry_delay"
-    fi
-    attempt=$((attempt + 1))
-  done
-
-  if $success; then
-    msg="✅ Fichaje correcto: $mode"
-    echo "$msg"
-    log "$msg"
-    tg_send success "✅ *woffy*: Fichaje *$mode* realizado ($(date +%H:%M))."
-    return 0
-  fi
-
-  msg="❌ Error al fichar $mode en la API tras $max_retries intentos."
-  echo "$msg"
-  log "$msg"
-  tg_send error "$msg"
+  log "API sign error ($action): HTTP $status_code | $body"
   return 1
 }
 
-build_weekly_report() {
-  local since="$1"
-  local until="$2"
-  local format="${3:-text}" # text|json|csv
-  local now in_count out_count err_count warn_count counts
-  now="$(date '+%Y-%m-%d %H:%M:%S')"
-
-  if [ ! -f "$LOG_FILE" ]; then
-    in_count=0; out_count=0; err_count=0; warn_count=0
-  else
-    counts="$(awk -v since="$since" -v until="$until" '
-      /^\[/ {
-        ts = substr($0,2,19)
-        if (ts < since || ts > until) next
-        if (index($0,"Fichaje correcto: in") > 0) in_count++
-        if (index($0,"Fichaje correcto: out") > 0) out_count++
-        if (index($0,"Error al fichar") > 0) err_count++
-        if ($0 ~ /(No ficho IN|No ficho OUT|No se ficha entrada|Abortando por seguridad)/) warn_count++
-      }
-      END {
-        printf "%d;%d;%d;%d\n", in_count + 0, out_count + 0, err_count + 0, warn_count + 0
-      }
-    ' "$LOG_FILE")"
-    IFS=';' read -r in_count out_count err_count warn_count <<< "$counts"
-  fi
-
-  case "$format" in
-    json)
-      cat <<EOF
-{"generated_at":"$(json_escape "$now")","from":"$(json_escape "$since")","to":"$(json_escape "$until")","entries_in":$in_count,"entries_out":$out_count,"warnings":$warn_count,"errors":$err_count}
-EOF
-      ;;
-    csv)
-      echo "generated_at,from,to,entries_in,entries_out,warnings,errors"
-      echo "\"$now\",\"$since\",\"$until\",$in_count,$out_count,$warn_count,$err_count"
-      ;;
-    *)
-      cat <<EOF
-📊 Reporte woffy
-Periodo: $since -> $until
-Generado: $now
-✅ Entradas: $in_count
-✅ Salidas: $out_count
-⚠️ Avisos: $warn_count
-❌ Errores: $err_count
-EOF
-      ;;
-  esac
+save_user_card_db() {
+  local login_email="$1"
+  local uj="$2"
+  local obj uid full cname office sched
+  obj="$(echo "$uj" | jq 'if type=="array" then .[0] else . end' 2>/dev/null || echo "")"
+  [ -z "$obj" ] && return 1
+  uid="$(echo "$obj" | jq -r '.UserId // empty')"
+  full="$(echo "$obj" | jq -r '.FullName // empty')"
+  cname="$(echo "$obj" | jq -r '.CompanyName // empty')"
+  office="$(echo "$obj" | jq -r '.OfficeName // empty')"
+  sched="$(echo "$obj" | jq -r '.Schedule.Name // .ScheduleName // empty')"
+  db_exec "INSERT INTO user_cards(email, woffu_user_id, full_name, company_name, office_name, schedule_name, raw_json, fetched_at)
+           VALUES($(sql_quote "$login_email"),$(sql_quote "$uid"),$(sql_quote "$full"),$(sql_quote "$cname"),$(sql_quote "$office"),$(sql_quote "$sched"),$(sql_quote "$obj"),datetime('now','localtime'))
+           ON CONFLICT(email) DO UPDATE SET
+             woffu_user_id=excluded.woffu_user_id,
+             full_name=excluded.full_name,
+             company_name=excluded.company_name,
+             office_name=excluded.office_name,
+             schedule_name=excluded.schedule_name,
+             raw_json=excluded.raw_json,
+             fetched_at=excluded.fetched_at;"
 }
 
-self_test() {
-  local fails=0
-  local ok=0
-  local msg
-
-  check_item() {
-    local name="$1"
-    shift
-    if "$@"; then
-      echo "✅ $name"
-      ok=$((ok + 1))
-    else
-      echo "❌ $name"
-      fails=$((fails + 1))
-    fi
-  }
-
-  file_perm_600() {
-    local f="$1"
-    local p=""
-    [ ! -f "$f" ] && return 1
-    p="$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f" 2>/dev/null || echo "")"
-    [ "$p" = "600" ]
-  }
-
-  check_item "Dependencias base (curl)" command -v curl
-  check_item "Dependencias JSON (jq)" command -v jq
-  check_item "Archivo config legible" test -f "$CONFIG_FILE"
-  check_item "Permiso config 600" file_perm_600 "$CONFIG_FILE"
-  check_item "Comando crontab disponible" command -v crontab
-  check_item "Log accesible" touch "$LOG_FILE"
-
-  if [ -f "$CONFIG_FILE" ]; then
-    safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
-    msg="$(get_token 2>/dev/null || true)"
-    if [ -n "$msg" ]; then
-      echo "✅ Token API disponible"
-      ok=$((ok + 1))
-    else
-      echo "⚠️ Token API no disponible (credenciales/API)"
-    fi
-  else
-    echo "⚠️ Sin config: no se prueba autenticación API"
-  fi
-
-  echo "Resumen self-test: OK=$ok FAIL=$fails"
-  [ "$fails" -eq 0 ]
-}
-
-# 
-# Workdaylite (solo para IN)
-# 
 get_user_id() {
-  if [ -f "$USER_FILE" ]; then
-    if validate_kv_file "$USER_FILE" "user"; then
-      safe_source_file "$USER_FILE" "user" 2>/dev/null || true
-    fi
-    [ -n "${WOFFY_USER_ID:-}" ] && { echo "$WOFFY_USER_ID"; return; }
+  local email="$1"
+  local uid uj
+  uid="$(db_exec "SELECT COALESCE(woffu_user_id,'') FROM user_cards WHERE email=$(sql_quote "$email") LIMIT 1;")"
+  if [ -n "$uid" ]; then
+    echo "$uid"
+    return 0
   fi
-
-  local uj
   uj="$(api_get_raw "/api/users")"
   echo "$uj" | jq -r 'if type=="array" then .[0].UserId else .UserId end // empty' 2>/dev/null || true
 }
 
 get_workday() {
+  local email="$1"
   local uid
-  uid="$(get_user_id)"
-  [ -z "$uid" ] && { echo ""; return; }
+  uid="$(get_user_id "$email")"
+  [ -z "$uid" ] && return 0
   api_get_raw "/api/users/$uid/workdaylite"
 }
 
@@ -630,339 +631,395 @@ workday_reason() {
   iw="$(echo "$wd" | jq -r '.IsWeekend // false' 2>/dev/null || echo "false")"
   ih="$(echo "$wd" | jq -r '.IsHoliday // false' 2>/dev/null || echo "false")"
   ie="$(echo "$wd" | jq -r '.IsEvent // false' 2>/dev/null || echo "false")"
-
-  if [ "$ih" = "true" ]; then echo "vacaciones/festivo (IsHoliday=true)";
-  elif [ "$ie" = "true" ]; then echo "evento/ausencia (IsEvent=true)";
-  elif [ "$iw" = "true" ]; then echo "fin de semana (IsWeekend=true)";
-  elif awk "BEGIN{exit !($sh<=0)}"; then echo "sin horas programadas (ScheduleHours=$sh)";
+  if [ "$ih" = "true" ]; then
+    echo "holiday/vacation"
+  elif [ "$ie" = "true" ]; then
+    echo "event/absence"
+  elif [ "$iw" = "true" ]; then
+    echo "weekend"
+  elif awk "BEGIN{exit !($sh<=0)}"; then
+    echo "no scheduled hours"
   else echo ""; fi
 }
 
 is_workday_ok_for_in() {
   local wd="$1"
-  [ -z "$wd" ] && return 0
   local sh
+  [ -z "$wd" ] && return 0
   sh="$(echo "$wd" | jq -r '.ScheduleHours // 0' 2>/dev/null || echo "0")"
   awk "BEGIN{exit !($sh>0)}"
 }
 
-# 
-# User card (ficha de trabajador)
-# 
-save_user_card() {
-  local uj="$1"
-  local obj
-  obj="$(echo "$uj" | jq 'if type=="array" then .[0] else . end' 2>/dev/null || echo "")"
-  [ -z "$obj" ] && return 1
-
-  local uid un full email cid cname office sched now
-
-  now="$(date +%s)"
-  
-  uid="$(echo "$obj" | jq -r '.UserId // empty')"
-  un="$(echo "$obj" | jq -r '.UserNumber // empty')"
-  full="$(echo "$obj" | jq -r '.FullName // empty')"
-  email="$(echo "$obj" | jq -r '.Email // empty')"
-  cid="$(echo "$obj" | jq -r '.CompanyId // empty')"
-  cname="$(echo "$obj" | jq -r '.CompanyName // empty')"
-  office="$(echo "$obj" | jq -r '.OfficeName // empty')"
-  sched="$(echo "$obj" | jq -r '.Schedule.Name // .ScheduleName // empty')"
-
-  {
-    echo "# woffy user card v1"
-    echo "WOFFY_USER_VERSION=1"
-    echo "WOFFY_USER_FETCHED_AT=\"$now\""
-    write_kv_line "WOFFY_USER_ID" "$uid"
-    write_kv_line "WOFFY_USER_NUMBER" "$un"
-    write_kv_line "WOFFY_FULL_NAME" "$full"
-    write_kv_line "WOFFY_EMAIL" "$email"
-    write_kv_line "WOFFY_COMPANY_ID" "$cid"
-    write_kv_line "WOFFY_COMPANY_NAME" "$cname"
-    write_kv_line "WOFFY_OFFICE_NAME" "$office"
-    write_kv_line "WOFFY_SCHEDULE_NAME" "$sched"
-  } > "$USER_FILE" 2>/dev/null || true
-  chmod 600 "$USER_FILE" 2>/dev/null || true
-  return 0
+notify_user_result() {
+  local type="$1"
+  local email="$2"
+  local msg="$3"
+  local name label
+  name="$(user_full_name "$email")"
+  label="$email"
+  [ -n "$name" ] && label="$name <$email>"
+  tg_send "$type" "woffy: $label: $msg"
 }
 
-user_card_summary() {
-  [ ! -f "$USER_FILE" ] && { echo "NO"; return; }
-  validate_kv_file "$USER_FILE" "user" || { echo "INVALIDO"; return; }
-  safe_source_file "$USER_FILE" "user" 2>/dev/null || { echo "INVALIDO"; return; }
-  if [ -n "${WOFFY_FULL_NAME:-}" ]; then
-    echo "OK"
-  else
-    echo "PARCIAL"
+run_sign_flow() {
+  local email="$1"
+  local mode="$2"
+  local dry_run="${3:-false}"
+  local quiet="${4:-false}"
+  local st wd reason action msg attempt success max_retries retry_delay
+
+  user_exists_active "$email" || {
+    echo "ERROR Unknown or inactive user: $email"
+    exit 1
+  }
+  TOKEN="$(get_token "$email")"
+  export TOKEN
+  st="$(get_status)"
+  log "$email | requested=$mode | status=$st | dry_run=$dry_run"
+
+  if [ "$st" = "unknown" ]; then
+    msg="Cannot determine current status. Aborting."
+    [ "$quiet" = "true" ] || echo "WARN $email: $msg"
+    record_event "$email" "$mode" "sign" "error" "$msg"
+    notify_user_result error "$email" "$msg"
+    return 1
   fi
+
+  if [ "$mode" = "in" ] && [ "$st" = "in" ]; then
+    msg="Already clocked in."
+    [ "$quiet" = "true" ] || echo "WARN $email: $msg"
+    record_event "$email" "$mode" "sign" "warning" "$msg"
+    notify_user_result error "$email" "$msg"
+    return 0
+  fi
+
+  if [ "$mode" = "out" ] && [ "$st" = "out" ]; then
+    msg="Already clocked out."
+    [ "$quiet" = "true" ] || echo "WARN $email: $msg"
+    record_event "$email" "$mode" "sign" "warning" "$msg"
+    notify_user_result error "$email" "$msg"
+    return 0
+  fi
+
+  if [ "$mode" = "in" ]; then
+    wd="$(get_workday "$email" || true)"
+    if [ -n "$wd" ] && ! is_workday_ok_for_in "$wd"; then
+      reason="$(workday_reason "$wd")"
+      [ -z "$reason" ] && reason="non-working day"
+      msg="Clock-in skipped: $reason."
+      [ "$quiet" = "true" ] || echo "WARN $email: $msg"
+      record_event "$email" "$mode" "sign" "warning" "$msg"
+      notify_user_result error "$email" "$msg"
+      return 0
+    fi
+  fi
+
+  if [ "$dry_run" = "true" ]; then
+    msg="DRY-RUN would clock $mode now."
+    [ "$quiet" = "true" ] || echo "INFO $email: $msg"
+    record_event "$email" "$mode" "sign" "dry-run" "$msg"
+    return 0
+  fi
+
+  action="clock_in"
+  [ "$mode" = "out" ] && action="clock_out"
+  max_retries=4
+  retry_delay=15
+  attempt=1
+  success=false
+
+  while [ "$attempt" -le "$max_retries" ]; do
+    if post_sign "$action"; then
+      success=true
+      break
+    fi
+    [ "$attempt" -lt "$max_retries" ] && sleep "$retry_delay"
+    attempt=$((attempt + 1))
+  done
+
+  if $success; then
+    msg="Clock $mode completed."
+    [ "$quiet" = "true" ] || echo "OK $email: $msg"
+    record_event "$email" "$mode" "sign" "success" "$msg"
+    notify_user_result success "$email" "$msg"
+    return 0
+  fi
+
+  msg="Clock $mode failed after $max_retries attempts."
+  [ "$quiet" = "true" ] || echo "ERROR $email: $msg"
+  record_event "$email" "$mode" "sign" "error" "$msg"
+  notify_user_result error "$email" "$msg"
+  return 1
 }
 
-# 
-# Cron
-# 
-clear_woffy_cron() {
-  local tmp
-  tmp="$(mktemp)"
-  crontab -l 2>/dev/null | grep -v '# woffy-' > "$tmp" || true
-  crontab "$tmp" || true
-  rm -f "$tmp"
+run_due() {
+  local now_time today dow rows email action guard_changed failures=0
+  db_init
+  acquire_lock
+  now_time="$(date '+%H:%M')"
+  today="$(date '+%Y-%m-%d')"
+  dow="$(date '+%u')"
+  rows="$(db_exec "SELECT users.email || char(9) || schedules.action
+                   FROM schedules JOIN users ON users.email=schedules.email
+                   WHERE users.active=1
+                     AND schedules.active=1
+                     AND schedules.time_hhmm=$(sql_quote "$now_time")
+                     AND instr(',' || schedules.weekdays || ',', ',' || $(sql_quote "$dow") || ',') > 0;")"
+  [ -z "$rows" ] && {
+    $QUIET || echo "No due users for $now_time."
+    return 0
+  }
+  while IFS=$'\t' read -r email action; do
+    [ -z "$email" ] && continue
+    guard_changed="$(db_exec "INSERT OR IGNORE INTO run_guard(email, action, run_date, time_hhmm)
+                              VALUES($(sql_quote "$email"),$(sql_quote "$action"),$(sql_quote "$today"),$(sql_quote "$now_time"));
+                              SELECT changes();")"
+    if [ "$guard_changed" != "1" ]; then
+      $QUIET || echo "SKIP $email: already processed $action at $now_time"
+      continue
+    fi
+    if ! run_sign_flow "$email" "$action" false "$QUIET"; then
+      failures=$((failures + 1))
+    fi
+  done <<<"$rows"
+  [ "$failures" -eq 0 ]
 }
 
-pause_woffy_cron() {
-  local tmp
-  tmp="$(mktemp)"
-  crontab -l 2>/dev/null | awk '
-    {
-      if ($0 ~ /# woffy-/ && $0 !~ /^# PAUSED-WOFFY /) {
-        print "# PAUSED-WOFFY " $0
-      } else {
-        print
-      }
-    }
-  ' > "$tmp" || true
-  crontab "$tmp" || true
-  rm -f "$tmp"
+build_report_all() {
+  local since="$1"
+  local until="$2"
+  local format="${3:-text}"
+  local now counts in_count out_count warn_count err_count dry_count
+  db_init
+  now="$(date '+%Y-%m-%d %H:%M:%S')"
+  counts="$(db_exec "SELECT
+      SUM(CASE WHEN action='in' AND status='success' THEN 1 ELSE 0 END),
+      SUM(CASE WHEN action='out' AND status='success' THEN 1 ELSE 0 END),
+      SUM(CASE WHEN status='warning' THEN 1 ELSE 0 END),
+      SUM(CASE WHEN status='error' THEN 1 ELSE 0 END),
+      SUM(CASE WHEN status='dry-run' THEN 1 ELSE 0 END)
+    FROM events
+    WHERE created_at >= $(sql_quote "$since") AND created_at <= $(sql_quote "$until");")"
+  IFS='|' read -r in_count out_count warn_count err_count dry_count <<<"$counts"
+  in_count="${in_count:-0}"
+  out_count="${out_count:-0}"
+  warn_count="${warn_count:-0}"
+  err_count="${err_count:-0}"
+  dry_count="${dry_count:-0}"
+
+  case "$format" in
+    json)
+      cat <<EOF
+{"generated_at":"$(json_escape "$now")","from":"$(json_escape "$since")","to":"$(json_escape "$until")","entries_in":${in_count:-0},"entries_out":${out_count:-0},"warnings":${warn_count:-0},"errors":${err_count:-0},"dry_runs":${dry_count:-0}}
+EOF
+      ;;
+    csv)
+      echo "generated_at,from,to,entries_in,entries_out,warnings,errors,dry_runs"
+      echo "\"$now\",\"$since\",\"$until\",${in_count:-0},${out_count:-0},${warn_count:-0},${err_count:-0},${dry_count:-0}"
+      ;;
+    *)
+      cat <<EOF
+Woffy multi-user report
+Period: $since -> $until
+Generated: $now
+Entries: ${in_count:-0}
+Exits: ${out_count:-0}
+Warnings: ${warn_count:-0}
+Errors: ${err_count:-0}
+Dry-runs: ${dry_count:-0}
+EOF
+      ;;
+  esac
 }
 
-resume_woffy_cron() {
-  local tmp
-  tmp="$(mktemp)"
-  crontab -l 2>/dev/null | sed 's/^# PAUSED-WOFFY //' > "$tmp" || true
-  crontab "$tmp" || true
-  rm -f "$tmp"
-}
+print_events() {
+  local target="${1:-all}"
+  local days="${2:-30}"
+  local status_filter="${3:-all}"
+  local format="${4:-text}"
+  local limit="${5:-200}"
+  local where email_clause status_clause
+  db_init
+  is_int "$days" || {
+    echo "ERROR Invalid days: $days"
+    exit 1
+  }
+  is_int "$limit" || {
+    echo "ERROR Invalid limit: $limit"
+    exit 1
+  }
+  email_clause=""
+  if [ "$target" != "all" ]; then
+    email_clause="AND email=$(sql_quote "$target")"
+  fi
+  status_clause=""
+  if [ "$status_filter" != "all" ]; then
+    status_clause="AND status=$(sql_quote "$status_filter")"
+  fi
+  where="created_at >= datetime('now','localtime','-${days} days') $email_clause $status_clause"
 
-validate_time() { [[ "$1" =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]]; }
+  case "$format" in
+    json)
+      db_exec "SELECT '{\"id\":' || id ||
+                     ',\"created_at\":\"' || replace(created_at,'\"','\\\"') || '\"' ||
+                     ',\"email\":\"' || replace(COALESCE(email,''),'\"','\\\"') || '\"' ||
+                     ',\"action\":\"' || replace(COALESCE(action,''),'\"','\\\"') || '\"' ||
+                     ',\"kind\":\"' || replace(kind,'\"','\\\"') || '\"' ||
+                     ',\"status\":\"' || replace(status,'\"','\\\"') || '\"' ||
+                     ',\"message\":\"' || replace(message,'\"','\\\"') || '\"}'
+               FROM events
+               WHERE $where
+               ORDER BY created_at DESC, id DESC
+               LIMIT $limit;" |
+        awk 'BEGIN{print "["} {if (NR>1) printf ",\n"; printf "%s",$0} END{print "\n]"}'
+      ;;
+    csv)
+      echo "id,created_at,email,action,kind,status,message"
+      db_exec "SELECT id || ',' ||
+                     '\"' || replace(created_at,'\"','\"\"') || '\",' ||
+                     '\"' || replace(COALESCE(email,''),'\"','\"\"') || '\",' ||
+                     '\"' || replace(COALESCE(action,''),'\"','\"\"') || '\",' ||
+                     '\"' || replace(kind,'\"','\"\"') || '\",' ||
+                     '\"' || replace(status,'\"','\"\"') || '\",' ||
+                     '\"' || replace(message,'\"','\"\"') || '\"'
+               FROM events
+               WHERE $where
+               ORDER BY created_at DESC, id DESC
+               LIMIT $limit;"
+      ;;
+    text)
+      db_exec "SELECT created_at || char(9) || COALESCE(email,'') || char(9) || COALESCE(action,'') || char(9) || kind || char(9) || status || char(9) || message
+               FROM events
+               WHERE $where
+               ORDER BY created_at DESC, id DESC
+               LIMIT $limit;" |
+        awk 'BEGIN{FS="\t"; printf "%-19s %-34s %-8s %-8s %-8s %s\n","CREATED_AT","EMAIL","ACTION","KIND","STATUS","MESSAGE"} {printf "%-19s %-34s %-8s %-8s %-8s %s\n",$1,$2,$3,$4,$5,$6}'
+      ;;
+    *)
+      echo "ERROR Invalid format: $format"
+      exit 1
+      ;;
+  esac
+}
 
 backup_files() {
   local out="${1:-$HOME/woffy-backup-$(date +%Y%m%d-%H%M%S).tar.gz}"
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir"
-  [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$tmpdir/"
-  [ -f "$TOKEN_FILE" ] && cp "$TOKEN_FILE" "$tmpdir/"
-  [ -f "$USER_FILE" ] && cp "$USER_FILE" "$tmpdir/"
-  [ -f "$LOG_FILE" ] && cp "$LOG_FILE" "$tmpdir/"
-  tar -czf "$out" -C "$tmpdir" . >/dev/null 2>&1
-  rm -rf "$tmpdir"
+  ensure_home
+  tar -czf "$out" -C "$WOFFY_HOME" . >/dev/null 2>&1
   echo "$out"
 }
 
 restore_files() {
   local in="$1"
-  [ ! -f "$in" ] && return 1
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  tar -xzf "$in" -C "$tmpdir" >/dev/null 2>&1 || { rm -rf "$tmpdir"; return 1; }
-  [ -f "$tmpdir/.woffy.conf" ] && cp "$tmpdir/.woffy.conf" "$CONFIG_FILE"
-  [ -f "$tmpdir/.woffy.token" ] && cp "$tmpdir/.woffy.token" "$TOKEN_FILE"
-  [ -f "$tmpdir/.woffy.user" ] && cp "$tmpdir/.woffy.user" "$USER_FILE"
-  [ -f "$tmpdir/.woffy.log" ] && cp "$tmpdir/.woffy.log" "$LOG_FILE"
-  chmod 600 "$CONFIG_FILE" "$TOKEN_FILE" "$USER_FILE" 2>/dev/null || true
-  rm -rf "$tmpdir"
-  return 0
+  [ -f "$in" ] || return 1
+  ensure_home
+  tar -xzf "$in" -C "$WOFFY_HOME" >/dev/null 2>&1 || return 1
+  chmod 700 "$WOFFY_HOME" 2>/dev/null || true
+  [ -f "$DB_FILE" ] && chmod 600 "$DB_FILE" 2>/dev/null || true
 }
 
-upsert_config_key() {
-  local key="$1"
-  local value="$2"
+clear_woffy_cron() {
   local tmp
   tmp="$(mktemp)"
-  if [ -f "$CONFIG_FILE" ]; then
-    grep -v "^${key}=" "$CONFIG_FILE" > "$tmp" || true
-  fi
-  write_kv_line "$key" "$value" >> "$tmp"
-  mv "$tmp" "$CONFIG_FILE"
-  chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+  crontab -l 2>/dev/null | grep -v '# woffy-' >"$tmp" || true
+  crontab "$tmp" || true
+  rm -f "$tmp"
 }
 
-install_systemd_user_timers() {
-  local script="$1"
-  local dir="$HOME/.config/systemd/user"
-  mkdir -p "$dir"
-
-  cat > "$dir/woffy-in.service" <<EOF
-[Unit]
-Description=Woffy clock in
-[Service]
-Type=oneshot
-ExecStart=$script in
-EOF
-  cat > "$dir/woffy-in.timer" <<'EOF'
-[Unit]
-Description=Woffy IN timer
-[Timer]
-OnCalendar=Mon..Fri 09:00
-OnCalendar=Mon..Fri 15:30
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-
-  cat > "$dir/woffy-out.service" <<EOF
-[Unit]
-Description=Woffy clock out
-[Service]
-Type=oneshot
-ExecStart=$script out
-EOF
-  cat > "$dir/woffy-out.timer" <<'EOF'
-[Unit]
-Description=Woffy OUT timer
-[Timer]
-OnCalendar=Mon..Fri 14:00
-OnCalendar=Mon..Fri 18:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-
-  cat > "$dir/woffy-report.service" <<EOF
-[Unit]
-Description=Woffy weekly report
-[Service]
-Type=oneshot
-ExecStart=$script report telegram
-EOF
-  cat > "$dir/woffy-report.timer" <<'EOF'
-[Unit]
-Description=Woffy weekly report timer
-[Timer]
-OnCalendar=Fri 18:00
-Persistent=true
-[Install]
-WantedBy=timers.target
-EOF
-
-  systemctl --user daemon-reload
-  systemctl --user enable --now woffy-in.timer woffy-out.timer woffy-report.timer
-}
-
-remove_systemd_user_timers() {
-  local dir="$HOME/.config/systemd/user"
-  systemctl --user disable --now woffy-in.timer woffy-out.timer woffy-report.timer 2>/dev/null || true
-  rm -f "$dir/woffy-in.service" "$dir/woffy-in.timer" \
-        "$dir/woffy-out.service" "$dir/woffy-out.timer" \
-        "$dir/woffy-report.service" "$dir/woffy-report.timer"
-  systemctl --user daemon-reload 2>/dev/null || true
+install_run_due_cron() {
+  local tmp script_path escaped
+  script_path="$(get_script_path)"
+  escaped="$(printf '%q' "$script_path")"
+  tmp="$(mktemp)"
+  crontab -l 2>/dev/null | grep -v '# woffy-run-due' >"$tmp" || true
+  echo "* * * * * $escaped run due --quiet # woffy-run-due" >>"$tmp"
+  crontab "$tmp"
+  rm -f "$tmp"
 }
 
 show_changelog() {
-  local remote local_v remote_v
-  local_v="$VERSION"
-  echo "Versión local: $local_v"
-  remote="$(curl -fsSL "${REPO_RAW_BASE}/woffy.sh" 2>/dev/null || true)"
-  if [ -z "$remote" ]; then
-    echo "⚠️ No se pudo consultar versión remota."
-    return 0
-  fi
-  # shellcheck disable=SC2016
-  remote_v="$(echo "$remote" | awk -F'"' '/^VERSION=/{print $2; exit}')"
-  [ -z "$remote_v" ] && remote_v="desconocida"
-  echo "Versión remota: $remote_v"
-  if [ "$remote_v" = "$local_v" ]; then
-    echo "✅ Estás al día."
-  else
-    echo "ℹ️ Hay actualización disponible."
-  fi
-
-  echo
-  echo "Últimos cambios (commits):"
-  curl -fsSL "https://api.github.com/repos/ruvelro/woffy/commits?per_page=8" 2>/dev/null \
-    | jq -r '.[] | "- " + (.commit.message | split("\n")[0]) + " (" + (.sha[0:7]) + ")"' 2>/dev/null \
-    || echo "- No disponible"
+  local remote_version commits
+  remote_version="$(curl -fsSL "$REPO_RAW_BASE/woffy.sh" | awk -F\" '/^VERSION=/{print $2; exit}' 2>/dev/null || echo "unknown")"
+  echo "Local:  v$VERSION"
+  echo "Remote: v$remote_version"
+  commits="$(curl -fsSL "https://api.github.com/repos/ruvelro/woffy/commits?per_page=8" |
+    jq -r '.[] | "- " + (.sha[0:7]) + " " + .commit.message' 2>/dev/null || true)"
+  [ -n "$commits" ] && echo "$commits"
 }
 
-# 
-# Help
-# 
 show_help() {
-cat <<EOF
-woffy v$VERSION - CLI para fichar en Woffu (modo usuario, sin sudo)
+  cat <<EOF
+woffy v$VERSION
 
-USO:
-  woffy [--no-telegram] <comando> [subcomando] [opciones]
+Multi-user Woffu attendance automation for a centrally managed VPS.
 
-COMANDOS PRINCIPALES:
-  in                 Fichar entrada (solo ficha si estabas fuera y hoy hay horas programadas)
-  out                Fichar salida  (solo ficha si estabas dentro)
-  dry-run            Simular fichaje sin enviar nada a la API (dry-run in|out)
-  status             Mostrar estado actual (in/out/unknown)
-  report             Reporte de fichajes (admite --from/--to/--format/--strict/telegram)
-  config             Validar configuracion local sin ejecutar nada (config check)
-  notify             Enviar notificación de prueba a Telegram (notify test ...)
-  self-test          Prueba automática de dependencias y estado local
-  backup             Backup de config/token/user/log
-  restore            Restaurar backup de woffy
-  changelog          Versión local/remota y últimos commits
-  user               Mostrar ficha de trabajador
-  login              Guardar credenciales y generar ficha de trabajador (~/.woffy.user)
-  telegram           Configurar Telegram (token/chat/thread/notify) y enviar test
-  telegram test      Enviar mensaje de prueba a Telegram
-  doctor             Diagnóstico completo (doctor --json)
-  update             Actualizar woffy (main por defecto, nightly opcional)
-  schedule           Gestionar cron
-  version            Mostrar versión
-  uninstall          Desinstalar woffy (borra binario, config y cron)
-  help               Mostrar esta ayuda
-
-CONFIGURACIÓN:
-  - Credenciales: $CONFIG_FILE
-  - Token cache:  $TOKEN_FILE
-  - Log:          $LOG_FILE
-  - Lock:         $LOCK_DIR
-  - Ficha:        $USER_FILE
-
-TELEGRAM:
-  woffy telegram
-    - Token Bot (ej: 123:ABC)
-    - Chat ID (ej: -100xxxx)
-    - Thread ID (opcional, para topics)
-    - Notify: all | errors | success
-  woffy telegram test
-
-CRON / SCHEDULE:
+Usage:
+  woffy login <email> <password>
+  woffy users [enable|disable|delete <email>]
+  woffy user <email>
+  woffy status <email>
+  woffy in <email>
+  woffy out <email>
+  woffy dry-run {in|out} <email>
+  woffy run due [--quiet]
+  woffy events {all|<email>} [--days N] [--status all|success|warning|error|dry-run] [--format text|json|csv] [--limit N]
+  woffy report all [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format text|json|csv] [telegram]
+  woffy schedule install
   woffy schedule list
   woffy schedule clear
-  woffy schedule pause
-  woffy schedule resume
-  woffy schedule timezone Europe/Madrid
-  woffy schedule report            (viernes 18:00)
-  woffy schedule systemd enable|disable|status
-  woffy schedule entrada HH:MM   (L-V)
-  woffy schedule salida  HH:MM   (L-V)
-
-EJEMPLOS:
-  woffy login
-  woffy status
-  woffy dry-run in
-  woffy report --format json
-  woffy report --strict --from 2026-01-31 --to 2026-01-01
-  woffy report --from 2026-01-01 --to 2026-01-31
-  woffy config check
-  woffy update nightly
-  woffy notify test warning "Mensaje de prueba"
-  woffy backup
+  woffy schedule user <email> list
+  woffy schedule user <email> add {in|out} HH:MM [weekdays]
+  woffy schedule user <email> set {in|out} HH:MM[,HH:MM...] [weekdays]
+  woffy schedule user <email> remove {in|out} HH:MM
+  woffy schedule user <email> clear
+  woffy schedule user <email> defaults
+  woffy telegram [test]
+  woffy doctor [--json]
+  woffy backup [path.tar.gz]
+  woffy restore <path.tar.gz>
   woffy changelog
-  woffy in
-  woffy out
-  woffy telegram
-  woffy schedule clear
-  woffy schedule entrada 09:00
-  woffy schedule salida 18:00
+  woffy update [nightly]
+  woffy version
+  woffy help
 
-NOTAS:
-  - 'report' usa por defecto la semana en curso (lunes -> hoy).
-  - Para 'in', woffy consulta /workdaylite y NO ficha si ScheduleHours <= 0.
-  - Si la API no permite determinar estado (unknown), woffy aborta por seguridad.
-  - Toda la información del usuario se guarda localmente tras 'woffy login'.
+State:
+  Home: $WOFFY_HOME
+  DB:   $DB_FILE
+  Log:  $LOG_FILE
+
+Notes:
+  - SQLite is the source of truth for users, credentials, tokens, schedules and events.
+  - New users receive default weekday schedules: in 09:00/15:30 and out 14:00/18:00.
+  - Weekdays use ISO numbers: 1=Monday ... 7=Sunday.
+  - Cron should call 'woffy run due --quiet' once per minute.
 EOF
 }
 
-# 
-# Main
-# 
+doctor_json() {
+  local sqlite_ok db_exists users_count cron_installed tg_enabled
+  sqlite_ok=false
+  command -v sqlite3 >/dev/null 2>&1 && sqlite_ok=true
+  db_exists=false
+  [ -f "$DB_FILE" ] && db_exists=true
+  users_count=0
+  if $sqlite_ok; then
+    db_init
+    users_count="$(db_exec "SELECT COUNT(*) FROM users;" 2>/dev/null || echo 0)"
+  fi
+  cron_installed=false
+  crontab -l 2>/dev/null | grep -q '# woffy-run-due' && cron_installed=true
+  tg_enabled=false
+  if $sqlite_ok; then
+    [ -n "$(settings_get TG_TOKEN 2>/dev/null || true)" ] && [ -n "$(settings_get TG_CHAT_ID 2>/dev/null || true)" ] && tg_enabled=true
+  fi
+  cat <<EOF
+{"version":"$VERSION","bin":"$(json_escape "$(get_bin_path)")","sqlite3":$sqlite_ok,"db":"$(json_escape "$DB_FILE")","db_exists":$db_exists,"users":$users_count,"cron_run_due":$cron_installed,"telegram":$tg_enabled}
+EOF
+  $sqlite_ok
+}
+
 case "${1:-}" in
-  help|"")
+  help | "")
     show_help
     ;;
 
@@ -971,165 +1028,206 @@ case "${1:-}" in
     ;;
 
   login)
-    check_deps curl jq date
-    if [ $# -ge 3 ]; then
-      EMAIL="$2"
-      PASS="$3"
-    else
-      read -r -p "Correo: " EMAIL
-      read -r -s -p "Contraseña: " PASS
-      echo
-    fi
-
-    # 1. Crear el archivo si no existe
-    touch "$CONFIG_FILE" 
-    
-    # 2. Filtrar y guardar (forma segura para set -e)
-    tmp="$(mktemp)"
-    if [ -s "$CONFIG_FILE" ]; then
-        grep -v '^WURL_' "$CONFIG_FILE" > "$tmp" || true
-    fi
-    
-    {
-      write_kv_line "WURL_USER" "$EMAIL"
-      write_kv_line "WURL_PASS" "$PASS"
-    } >> "$tmp"
-    
-    mv "$tmp" "$CONFIG_FILE"
-    chmod 600 "$CONFIG_FILE"
-    rm -f "$TOKEN_FILE" 2>/dev/null || true
-  
-    # 3. Exportar para uso inmediato
-    export WURL_USER="$EMAIL"
-    export WURL_PASS="$PASS"
-  
-    TOKEN="$(get_token)"
+    check_deps curl jq sqlite3 date
+    [ -n "${2:-}" ] || {
+      echo "Usage: woffy login <email> <password>"
+      exit 1
+    }
+    [ -n "${3:-}" ] || {
+      echo "Usage: woffy login <email> <password>"
+      exit 1
+    }
+    EMAIL="$2"
+    PASS="$3"
+    db_init
+    db_exec "INSERT INTO users(email,password,active,created_at,updated_at)
+             VALUES($(sql_quote "$EMAIL"),$(sql_quote "$PASS"),1,datetime('now','localtime'),datetime('now','localtime'))
+             ON CONFLICT(email) DO UPDATE SET password=excluded.password, active=1, updated_at=excluded.updated_at;"
+    seed_default_schedule "$EMAIL"
+    db_exec "DELETE FROM tokens WHERE email=$(sql_quote "$EMAIL");"
+    TOKEN="$(get_token "$EMAIL")"
     export TOKEN
-    
-    # 4. Obtener ficha
     uj="$(api_get_raw "/api/users" || true)"
-    
     if [ -n "$uj" ] && echo "$uj" | jq -e 'if type=="array" then .[0].UserId else .UserId end' >/dev/null 2>&1; then
-      save_user_card "$uj"
-      echo "✅ Login correcto. Ficha de trabajador guardada."
+      save_user_card_db "$EMAIL" "$uj"
+      record_event "$EMAIL" "login" "auth" "success" "Login completed and user card saved."
+      echo "OK Login completed for $EMAIL. User card saved."
     else
-      echo "⚠️ Login OK, pero no se pudo generar la ficha de usuario (API error)."
+      record_event "$EMAIL" "login" "auth" "warning" "Login completed but user card could not be fetched."
+      echo "WARN Login completed for $EMAIL, but user card could not be fetched."
     fi
     ;;
 
-
-  user)
-    if [ ! -f "$USER_FILE" ]; then
-      echo "❌ No existe ficha de usuario. Ejecuta: woffy login"
-      exit 1
-    fi
-
-    validate_kv_file "$USER_FILE" "user" || {
-      echo "ERROR Ficha de usuario corrupta/insegura."
-      exit 1
-    }
-    safe_source_file "$USER_FILE" "user" 2>/dev/null || {
-      echo "ERROR Ficha de usuario corrupta."
-      exit 1
-    }
-
-    echo "👤 Usuario Woffy"
-    echo "Nombre:   ${WOFFY_FULL_NAME:-?}"
-    echo "Email:    ${WOFFY_EMAIL:-?}"
-    echo "Empresa:  ${WOFFY_COMPANY_NAME:-?}"
-    echo "Oficina:  ${WOFFY_OFFICE_NAME:-?}"
-    echo "User ID:  ${WOFFY_USER_ID:-?}"
-    echo "User Nº:  ${WOFFY_USER_NUMBER:-?}"
-    echo "Horario:  ${WOFFY_SCHEDULE_NAME:-?}"
-    ;;
-
-  telegram)
-    check_deps curl
-    if [ "${2:-}" = "test" ]; then
-      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
-      tg_send test "🟢 Telegram OK (woffy)"
-      echo "✅ Mensaje enviado."
-      exit 0
-    fi
-
-    echo "Configuración de Telegram (Enter para saltar / mantener)"
-    # valores actuales (si existen) para no pisar con vacío
-    CUR_TG_TOKEN="${TG_TOKEN:-}"
-    CUR_CHAT_ID="${TG_CHAT_ID:-}"
-    CUR_THREAD="${TG_THREAD:-}"
-    CUR_NOTIFY="${TG_NOTIFY:-all}"
-
-    read -r -p "Token Bot [${CUR_TG_TOKEN:+ya configurado}]: " TG
-    read -r -p "Chat ID [${CUR_CHAT_ID:+ya configurado}]: " CHAT
-    read -r -p "Thread ID (opcional) [${CUR_THREAD:-none}]: " THREAD
-    read -r -p "Notify (all|errors|success) [$CUR_NOTIFY]: " NOTIFY
-
-    TG="${TG:-$CUR_TG_TOKEN}"
-    CHAT="${CHAT:-$CUR_CHAT_ID}"
-    THREAD="${THREAD:-$CUR_THREAD}"
-    NOTIFY="${NOTIFY:-$CUR_NOTIFY}"
-    if [ -n "$THREAD" ] && ! [[ "$THREAD" =~ ^-?[0-9]+$ ]]; then
-      echo "❌ Thread ID inválido. Debe ser numérico."
-      exit 1
-    fi
-
-    tmp="$(mktemp)"
-    grep -v '^TG_' "$CONFIG_FILE" 2>/dev/null > "$tmp" || true
-    {
-      [ -n "$TG" ] && write_kv_line "TG_TOKEN" "$TG"
-      [ -n "$CHAT" ] && write_kv_line "TG_CHAT_ID" "$CHAT"
-      [ -n "$THREAD" ] && write_kv_line "TG_THREAD" "$THREAD"
-      write_kv_line "TG_NOTIFY" "$NOTIFY"
-    } >> "$tmp"
-    mv "$tmp" "$CONFIG_FILE"
-    chmod 600 "$CONFIG_FILE"
-
-    # Recargar para que tg_send use valores nuevos
-    safe_source_file "$CONFIG_FILE" "config"
-
-    echo "✅ Telegram guardado. (notify=$TG_NOTIFY${TG_THREAD:+, thread=$TG_THREAD})"
-    tg_send test "🟢 Telegram configurado correctamente en woffy"
-    ;;
-
-  status)
-    check_deps curl jq date
-    [ -f "$CONFIG_FILE" ] && safe_source_file "$CONFIG_FILE" "config"
-    TOKEN="$(get_token)"
-    export TOKEN
-    st="$(get_status)"
-    case "$st" in
-      in) echo "🟢 DENTRO" ;;
-      out) echo "⚪ FUERA" ;;
-      *) echo "⚠️ Estado desconocido (API/JSON inesperado)" ;;
+  users)
+    check_deps sqlite3
+    db_init
+    case "${2:-}" in
+      "")
+        print_users
+        ;;
+      enable)
+        [ -n "${3:-}" ] || {
+          echo "Usage: woffy users enable <email>"
+          exit 1
+        }
+        set_user_active "$3" 1
+        ;;
+      disable)
+        [ -n "${3:-}" ] || {
+          echo "Usage: woffy users disable <email>"
+          exit 1
+        }
+        set_user_active "$3" 0
+        ;;
+      delete)
+        [ -n "${3:-}" ] || {
+          echo "Usage: woffy users delete <email>"
+          exit 1
+        }
+        delete_user "$3"
+        ;;
+      *)
+        echo "Usage: woffy users [enable|disable|delete <email>]"
+        exit 1
+        ;;
     esac
     ;;
 
-  dry-run)
-    check_deps curl jq awk date
-    [ -f "$CONFIG_FILE" ] && safe_source_file "$CONFIG_FILE" "config"
-    MODE="${2:-}"
-    if [ "$MODE" != "in" ] && [ "$MODE" != "out" ]; then
-      echo "Uso: woffy dry-run {in|out}"
+  user)
+    check_deps sqlite3
+    [ -n "${2:-}" ] || {
+      echo "Usage: woffy user <email>"
       exit 1
-    fi
-    acquire_lock
-    TOKEN="$(get_token)"
+    }
+    db_init
+    db_exec "SELECT
+               'Email: ' || users.email || char(10) ||
+               'Active: ' || users.active || char(10) ||
+               'Name: ' || COALESCE(user_cards.full_name,'') || char(10) ||
+               'Company: ' || COALESCE(user_cards.company_name,'') || char(10) ||
+               'Office: ' || COALESCE(user_cards.office_name,'') || char(10) ||
+               'Woffu user id: ' || COALESCE(user_cards.woffu_user_id,'')
+             FROM users LEFT JOIN user_cards ON user_cards.email=users.email
+             WHERE users.email=$(sql_quote "$2");"
+    ;;
+
+  status)
+    check_deps curl jq sqlite3 date
+    [ -n "${2:-}" ] || {
+      echo "Usage: woffy status <email>"
+      exit 1
+    }
+    TOKEN="$(get_token "$2")"
     export TOKEN
-    run_sign_flow "$MODE" true
+    st="$(get_status)"
+    echo "$2: $st"
+    ;;
+
+  dry-run)
+    check_deps curl jq awk sqlite3 date
+    MODE="${2:-}"
+    EMAIL="${3:-}"
+    [ "$MODE" = "in" ] || [ "$MODE" = "out" ] || {
+      echo "Usage: woffy dry-run {in|out} <email>"
+      exit 1
+    }
+    [ -n "$EMAIL" ] || {
+      echo "Usage: woffy dry-run {in|out} <email>"
+      exit 1
+    }
+    acquire_lock
+    run_sign_flow "$EMAIL" "$MODE" true "$QUIET"
+    ;;
+
+  in | out)
+    check_deps curl jq awk sqlite3 date
+    [ -n "${2:-}" ] || {
+      echo "Usage: woffy $1 <email>"
+      exit 1
+    }
+    acquire_lock
+    run_sign_flow "$2" "$1" false "$QUIET"
+    ;;
+
+  run)
+    check_deps curl jq awk sqlite3 date
+    case "${2:-}" in
+      due) run_due ;;
+      *)
+        echo "Usage: woffy run due [--quiet]"
+        exit 1
+        ;;
+    esac
+    ;;
+
+  events)
+    check_deps sqlite3 awk date
+    TARGET="${2:-all}"
+    DAYS=30
+    STATUS_FILTER="all"
+    EVENTS_FORMAT="text"
+    EVENTS_LIMIT=200
+    shift || true
+    [ "$#" -gt 0 ] && shift || true
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --days)
+          [ -n "${2:-}" ] || {
+            echo "ERROR Missing --days value"
+            exit 1
+          }
+          DAYS="$2"
+          shift 2
+          ;;
+        --status)
+          [ -n "${2:-}" ] || {
+            echo "ERROR Missing --status value"
+            exit 1
+          }
+          STATUS_FILTER="$2"
+          shift 2
+          ;;
+        --format)
+          [ -n "${2:-}" ] || {
+            echo "ERROR Missing --format value"
+            exit 1
+          }
+          EVENTS_FORMAT="$2"
+          shift 2
+          ;;
+        --limit)
+          [ -n "${2:-}" ] || {
+            echo "ERROR Missing --limit value"
+            exit 1
+          }
+          EVENTS_LIMIT="$2"
+          shift 2
+          ;;
+        *)
+          echo "ERROR Unknown events option: $1"
+          exit 1
+          ;;
+      esac
+    done
+    case "$STATUS_FILTER" in all | success | warning | error | dry-run) ;; *)
+      echo "ERROR Invalid status: $STATUS_FILTER"
+      exit 1
+      ;;
+    esac
+    print_events "$TARGET" "$DAYS" "$STATUS_FILTER" "$EVENTS_FORMAT" "$EVENTS_LIMIT"
     ;;
 
   report)
-    check_deps awk date
-    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
-      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
-    fi
+    check_deps sqlite3 date
+    [ "${2:-}" = "all" ] || {
+      echo "Usage: woffy report all [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format text|json|csv] [telegram]"
+      exit 1
+    }
     REPORT_FROM="$(current_week_start_date)"
     REPORT_TO="$(date '+%Y-%m-%d')"
     REPORT_FORMAT="text"
-    STRICT_RANGE=false
     SEND_TG=false
-
-    shift || true
+    shift 2 || true
     while [ "$#" -gt 0 ]; do
       case "$1" in
         telegram)
@@ -1137,128 +1235,209 @@ case "${1:-}" in
           shift
           ;;
         --from)
-          [ -z "${2:-}" ] && { echo "❌ Falta valor para --from"; exit 1; }
+          [ -n "${2:-}" ] || {
+            echo "ERROR Missing --from value"
+            exit 1
+          }
           REPORT_FROM="$2"
           shift 2
           ;;
         --to)
-          [ -z "${2:-}" ] && { echo "❌ Falta valor para --to"; exit 1; }
+          [ -n "${2:-}" ] || {
+            echo "ERROR Missing --to value"
+            exit 1
+          }
           REPORT_TO="$2"
           shift 2
           ;;
         --format)
-          [ -z "${2:-}" ] && { echo "❌ Falta valor para --format"; exit 1; }
+          [ -n "${2:-}" ] || {
+            echo "ERROR Missing --format value"
+            exit 1
+          }
           REPORT_FORMAT="$2"
           shift 2
           ;;
-        --strict)
-          STRICT_RANGE=true
-          shift
-          ;;
         *)
-          echo "❌ Opción desconocida en report: $1"
+          echo "ERROR Unknown report option: $1"
           exit 1
           ;;
       esac
     done
-
-    is_valid_date "$REPORT_FROM" || { echo "❌ Fecha inválida en --from (YYYY-MM-DD)"; exit 1; }
-    is_valid_date "$REPORT_TO" || { echo "❌ Fecha inválida en --to (YYYY-MM-DD)"; exit 1; }
-    case "$REPORT_FORMAT" in text|json|csv) ;; *) echo "ERROR Formato invalido: $REPORT_FORMAT"; exit 1 ;; esac
-    if [[ "$REPORT_FROM" > "$REPORT_TO" ]]; then
-      if $STRICT_RANGE; then
-        echo "ERROR Rango invalido: --from ($REPORT_FROM) es mayor que --to ($REPORT_TO)."
-        exit 1
-      fi
-      echo "WARN Rango invertido detectado. Intercambiando fechas automaticamente."
-      tmp_date="$REPORT_FROM"
-      REPORT_FROM="$REPORT_TO"
-      REPORT_TO="$tmp_date"
-    fi
-
-    REPORT_MSG="$(build_weekly_report "$(date_to_boundary "$REPORT_FROM" start)" "$(date_to_boundary "$REPORT_TO" end)" "$REPORT_FORMAT")"
+    is_valid_date "$REPORT_FROM" || {
+      echo "ERROR Invalid --from date (YYYY-MM-DD)"
+      exit 1
+    }
+    is_valid_date "$REPORT_TO" || {
+      echo "ERROR Invalid --to date (YYYY-MM-DD)"
+      exit 1
+    }
+    case "$REPORT_FORMAT" in text | json | csv) ;; *)
+      echo "ERROR Invalid format: $REPORT_FORMAT"
+      exit 1
+      ;;
+    esac
+    REPORT_MSG="$(build_report_all "$(date_to_boundary "$REPORT_FROM" start)" "$(date_to_boundary "$REPORT_TO" end)" "$REPORT_FORMAT")"
     echo "$REPORT_MSG"
-    log "Reporte generado: from=$REPORT_FROM to=$REPORT_TO format=$REPORT_FORMAT send_tg=$SEND_TG"
     if $SEND_TG; then
-      if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
-        tg_send info "$REPORT_MSG" true
-        log "Reporte enviado a Telegram."
-        echo "✅ Reporte enviado a Telegram."
-      else
-        log "Reporte no enviado: Telegram no configurado."
-        echo "⚠️ Telegram no configurado. Reporte solo mostrado por consola."
-      fi
+      tg_send info "$REPORT_MSG" true
+      echo "OK Report sent to Telegram if configured."
     fi
     ;;
 
-  notify)
-    check_deps curl
-    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
-      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
-    fi
-    if [ "${2:-}" != "test" ]; then
-      echo "Uso: woffy notify test {success|warning|error|info|all} [mensaje]"
-      exit 1
-    fi
-    KIND="${3:-all}"
-    CUSTOM_MSG="${4:-Mensaje de prueba woffy}"
-    case "$KIND" in
-      success) tg_send success "✅ $CUSTOM_MSG" ;;
-      warning) tg_send info "⚠️ $CUSTOM_MSG" ;;
-      error) tg_send error "❌ $CUSTOM_MSG" ;;
-      info) tg_send info "ℹ️ $CUSTOM_MSG" ;;
-      all)
-        tg_send success "✅ $CUSTOM_MSG"
-        tg_send info "⚠️ $CUSTOM_MSG"
-        tg_send error "❌ $CUSTOM_MSG"
-        tg_send info "ℹ️ $CUSTOM_MSG"
+  schedule)
+    check_deps sqlite3
+    db_init
+    case "${2:-}" in
+      install)
+        check_deps crontab readlink
+        install_run_due_cron
+        echo "OK Cron orchestrator installed."
+        ;;
+      list)
+        check_deps crontab
+        crontab -l 2>/dev/null | grep 'woffy-' || echo "No woffy cron entries."
+        ;;
+      clear)
+        check_deps crontab
+        clear_woffy_cron
+        echo "OK Cron cleared."
+        ;;
+      user)
+        EMAIL="${3:-}"
+        SUB="${4:-}"
+        [ -n "$EMAIL" ] || {
+          echo "Usage: woffy schedule user <email> {list|add|set|remove|clear|defaults}"
+          exit 1
+        }
+        case "$SUB" in
+          list)
+            print_user_schedule "$EMAIL"
+            ;;
+          add)
+            [ -n "${5:-}" ] && [ -n "${6:-}" ] || {
+              echo "Usage: woffy schedule user <email> add {in|out} HH:MM [weekdays]"
+              exit 1
+            }
+            add_user_schedule "$EMAIL" "$5" "$6" "${7:-1,2,3,4,5}"
+            ;;
+          set)
+            [ -n "${5:-}" ] && [ -n "${6:-}" ] || {
+              echo "Usage: woffy schedule user <email> set {in|out} HH:MM[,HH:MM...] [weekdays]"
+              exit 1
+            }
+            set_user_schedule "$EMAIL" "$5" "$6" "${7:-1,2,3,4,5}"
+            ;;
+          remove)
+            [ -n "${5:-}" ] && [ -n "${6:-}" ] || {
+              echo "Usage: woffy schedule user <email> remove {in|out} HH:MM"
+              exit 1
+            }
+            remove_user_schedule "$EMAIL" "$5" "$6"
+            ;;
+          clear)
+            clear_user_schedule "$EMAIL"
+            ;;
+          defaults)
+            reset_default_schedule "$EMAIL"
+            ;;
+          *)
+            echo "Usage: woffy schedule user <email> {list|add|set|remove|clear|defaults}"
+            exit 1
+            ;;
+        esac
         ;;
       *)
-        echo "❌ Tipo inválido: $KIND"
+        echo "Usage: woffy schedule {install|list|clear|user <email> ...}"
         exit 1
         ;;
     esac
-    echo "✅ Notificación enviada."
+    ;;
+
+  telegram)
+    check_deps curl sqlite3
+    db_init
+    if [ "${2:-}" = "test" ]; then
+      tg_send test "woffy Telegram OK" true
+      echo "OK Telegram test sent if configured."
+      exit 0
+    fi
+    if [ $# -ge 3 ]; then
+      settings_set TG_TOKEN "$2"
+      settings_set TG_CHAT_ID "$3"
+      [ -n "${4:-}" ] && settings_set TG_THREAD "$4"
+      [ -n "${5:-}" ] && settings_set TG_NOTIFY "$5"
+      echo "OK Telegram settings saved."
+      exit 0
+    fi
+    echo "Usage: woffy telegram <bot_token> <chat_id> [thread_id] [all|errors|success]"
+    ;;
+
+  config)
+    case "${2:-}" in
+      check)
+        check_deps sqlite3
+        db_init
+        echo "OK SQLite config valid: $DB_FILE"
+        ;;
+      *)
+        echo "Usage: woffy config check"
+        exit 1
+        ;;
+    esac
     ;;
 
   self-test)
-    check_deps curl jq awk date
-    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
-      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
+    check_deps curl jq awk sqlite3 date
+    db_init
+    echo "OK sqlite3 available"
+    echo "OK DB initialized: $DB_FILE"
+    echo "OK Users: $(db_exec "SELECT COUNT(*) FROM users;")"
+    ;;
+
+  doctor)
+    if [ "${2:-}" = "--json" ]; then
+      doctor_json
+      exit $?
     fi
-    self_test || exit 1
+    check_deps sqlite3
+    db_init
+    echo "Woffy doctor v$VERSION"
+    echo "Bin:   $(get_bin_path)"
+    echo "Home:  $WOFFY_HOME"
+    echo "DB:    $DB_FILE"
+    echo "Users: $(db_exec "SELECT COUNT(*) FROM users;")"
+    if crontab -l 2>/dev/null | grep -q '# woffy-run-due'; then
+      echo "Cron:  run-due installed"
+    else
+      echo "Cron:  not installed"
+    fi
     ;;
 
   backup)
     check_deps tar
     OUT="${2:-}"
     BAK_PATH="$(backup_files "$OUT")"
-    echo "✅ Backup creado: $BAK_PATH"
+    echo "OK Backup created: $BAK_PATH"
     ;;
 
   restore)
-    check_deps tar
-    [ -z "${2:-}" ] && { echo "Uso: woffy restore /ruta/backup.tar.gz"; exit 1; }
-    if restore_files "$2"; then
-      echo "✅ Backup restaurado."
-    else
-      echo "❌ No se pudo restaurar el backup."
+    check_deps tar sqlite3
+    [ -n "${2:-}" ] || {
+      echo "Usage: woffy restore <path.tar.gz>"
       exit 1
-    fi
+    }
+    restore_files "$2" || {
+      echo "ERROR Could not restore backup."
+      exit 1
+    }
+    db_init
+    echo "OK Backup restored."
     ;;
 
   changelog)
     check_deps curl jq awk
     show_changelog
-    ;;
-
-  in|out)
-    check_deps curl jq awk date
-    [ -f "$CONFIG_FILE" ] && safe_source_file "$CONFIG_FILE" "config"
-    acquire_lock
-    TOKEN="$(get_token)"
-    export TOKEN
-    run_sign_flow "$1" false || exit 1
     ;;
 
   update)
@@ -1267,289 +1446,43 @@ case "${1:-}" in
     if [ "${2:-}" = "nightly" ]; then
       UPDATE_BRANCH="nightly"
     elif [ -n "${2:-}" ]; then
-      echo "Uso: woffy update [nightly]"
+      echo "Usage: woffy update [nightly]"
       exit 1
     fi
-    UPDATE_RAW_BASE="https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/$UPDATE_BRANCH"
-
     BIN_PATH="$(get_bin_path)"
-  
-    if [ -z "$BIN_PATH" ]; then
-      echo "ERROR No se encuentra el binario actual de woffy"
+    [ -n "$BIN_PATH" ] || {
+      echo "ERROR Current woffy binary not found"
       exit 1
-    fi
-  
+    }
     TMP="$(mktemp)"
-    echo "INFO Descargando version '$UPDATE_BRANCH' de woffy..."
-  
-    if ! curl -fsSL "${UPDATE_RAW_BASE}/woffy.sh" -o "$TMP"; then
-      echo "ERROR Error descargando la actualizacion"
+    curl -fsSL "https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/$UPDATE_BRANCH/woffy.sh" -o "$TMP" || {
       rm -f "$TMP"
+      echo "ERROR Could not download update"
       exit 1
-    fi
-
+    }
     chmod +x "$TMP"
     mv "$TMP" "$BIN_PATH"
-  
-    echo "SUCCESS Woffy actualizado correctamente desde '$UPDATE_BRANCH'."
-    exit 0
-    ;;
-  doctor)
-    check_deps curl jq awk date
-    TOKEN="$(get_token 2>/dev/null || true)"
-    export TOKEN
-    if [ "${2:-}" = "--json" ]; then
-      CFG="false"; [ -f "$CONFIG_FILE" ] && CFG="true"
-      LCK="false"; [ -d "$LOCK_DIR" ] && LCK="true"
-      USTAT="$(user_card_summary)"
-      ST="unknown"; [ -n "${TOKEN:-}" ] && ST="$(get_status)"
-      TG="false"; [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ] && TG="true"
-      cat <<EOF
-{"version":"$VERSION","bin":"$(json_escape "$(get_bin_path)")","config":$CFG,"lock":$LCK,"token":"$(json_escape "$(token_status_human)")","status":"$(json_escape "$ST")","user":"$(json_escape "$USTAT")","telegram":$TG}
-EOF
-      exit 0
-    fi
-    
-    echo "🩺 Diagnóstico woffy v$VERSION"
-    echo
-    echo "Sistema"
-    if [ -f "$CONFIG_FILE" ]; then
-      config_state="OK"
-    else
-      config_state="NO"
-    fi
-    if [ -d "$LOCK_DIR" ]; then
-      lock_state="ACTIVO"
-    else
-      lock_state="libre"
-    fi
-    echo "  Bin:     $(get_bin_path)"
-    echo "  Config:  $config_state"
-    echo "  Deps:    OK"
-    echo "  Lock:    $lock_state"
-    echo
-    echo "Autenticación"
-    echo "  Token:   $(token_status_human)"
-    echo
-    echo "Usuario"
-    if [ -f "$USER_FILE" ]; then
-      if validate_kv_file "$USER_FILE" "user"; then
-        safe_source_file "$USER_FILE" "user" 2>/dev/null || true
-      fi
-      echo "  Ficha:   OK"
-      echo "  Nombre:  ${WOFFY_FULL_NAME:-?}"
-      echo "  Empresa: ${WOFFY_COMPANY_NAME:-?}"
-    else
-      echo "  Ficha:   NO"
-    fi
-
-    if [ -n "${TOKEN:-}" ]; then
-      echo "Estado:  $(get_status)"
-    else
-      echo "Estado:  unknown"
-    fi
-
-    echo "User:    $(user_card_summary)"
-    if [ -f "$USER_FILE" ]; then
-      if validate_kv_file "$USER_FILE" "user"; then
-        safe_source_file "$USER_FILE" "user" 2>/dev/null || true
-      fi
-      [ -n "${WOFFY_FULL_NAME:-}" ] && echo "Nombre:  $WOFFY_FULL_NAME"
-      [ -n "${WOFFY_EMAIL:-}" ] && echo "Email:   $WOFFY_EMAIL"
-      [ -n "${WOFFY_COMPANY_NAME:-}" ] && echo "Empresa: $WOFFY_COMPANY_NAME"
-      [ -n "${WOFFY_USER_NUMBER:-}" ] && echo "UserNo:  $WOFFY_USER_NUMBER"
-      [ -n "${WOFFY_USER_ID:-}" ] && echo "UserId:  $WOFFY_USER_ID"
-    fi
-
-    wd="$(get_workday)"
-    if echo "$wd" | jq -e '.ScheduleHours' >/dev/null 2>&1; then
-      sh="$(echo "$wd" | jq -r '.ScheduleHours')"
-      rsn="$(workday_reason "$wd")"
-      echo "Workday: ${sh}h | Reason: ${rsn}"
-    else
-      echo "Workday: (no disponible)"
-    fi
-
-    if [ -n "${TG_TOKEN:-}" ] && [ -n "${TG_CHAT_ID:-}" ]; then
-      echo "TG:      OK (enviando test...)"
-      tg_send test "🟢 woffy doctor: Telegram OK"
-    else
-      echo "TG:      NO configurado"
-    fi
-    ;;
-
-  schedule)
-    check_deps crontab readlink
-    if [ -f "$CONFIG_FILE" ] && validate_kv_file "$CONFIG_FILE" "config"; then
-      safe_source_file "$CONFIG_FILE" "config" 2>/dev/null || true
-    fi
-    SCRIPT_PATH="$(get_script_path)"
-    SCRIPT_PATH_ESCAPED="$(printf '%q' "$SCRIPT_PATH")"
-    TZ_LINE=""
-    [ -n "${WOFFY_TZ:-}" ] && TZ_LINE="CRON_TZ=$WOFFY_TZ # woffy-tz"
-
-    case "${2:-}" in
-      list)
-        crontab -l 2>/dev/null | grep 'woffy-' || echo "Sin tareas."
-        [ -n "${WOFFY_TZ:-}" ] && echo "Timezone configurada: $WOFFY_TZ"
-        ;;
-      clear)
-        clear_woffy_cron
-        echo "✅ Cron limpiado."
-        ;;
-      pause)
-        pause_woffy_cron
-        echo "✅ Cron de woffy en pausa."
-        ;;
-      resume)
-        resume_woffy_cron
-        echo "✅ Cron de woffy reanudado."
-        ;;
-      report)
-        tmp="$(mktemp)"
-        crontab -l 2>/dev/null | grep -v '# woffy-report' > "$tmp" || true
-        [ -n "$TZ_LINE" ] && {
-          grep -q '# woffy-tz' "$tmp" || echo "$TZ_LINE" >> "$tmp"
-        }
-        echo "0 18 * * 5 $SCRIPT_PATH_ESCAPED report telegram # woffy-report" >> "$tmp"
-        crontab "$tmp"
-        rm -f "$tmp"
-        echo "✅ Reporte semanal programado (viernes 18:00)."
-        ;;
-      timezone)
-        [ -z "${3:-}" ] && { echo "Uso: woffy schedule timezone <TZ>"; exit 1; }
-        upsert_config_key "WOFFY_TZ" "$3"
-        tmp="$(mktemp)"
-        crontab -l 2>/dev/null | grep -v '# woffy-tz' > "$tmp" || true
-        echo "CRON_TZ=$3 # woffy-tz" >> "$tmp"
-        crontab "$tmp"
-        rm -f "$tmp"
-        echo "✅ Timezone de cron guardada: $3"
-        ;;
-      systemd)
-        check_deps systemctl
-        case "${3:-}" in
-          enable|install)
-            install_systemd_user_timers "$SCRIPT_PATH"
-            echo "✅ Timers systemd --user activados."
-            ;;
-          disable|remove)
-            remove_systemd_user_timers
-            echo "✅ Timers systemd --user eliminados."
-            ;;
-          status)
-            systemctl --user status woffy-in.timer woffy-out.timer woffy-report.timer --no-pager || true
-            ;;
-          *)
-            echo "Uso: woffy schedule systemd {enable|disable|status}"
-            exit 1
-            ;;
-        esac
-        ;;
-      entrada|salida)
-        TYPE="in"
-        TAG="# woffy-in"
-        DEFAULT_TIMES=("09:00" "15:30")
-
-        if [ "$2" = "salida" ]; then
-          TYPE="out"
-          TAG="# woffy-out"
-          DEFAULT_TIMES=("14:00" "18:00")
-        fi
-
-        if [ -n "${3:-}" ]; then
-          validate_time "$3" || { echo "❌ Hora inválida"; exit 1; }
-          TIMES=("$3")
-        else
-          TIMES=("${DEFAULT_TIMES[@]}")
-        fi
-
-        tmp="$(mktemp)"
-        crontab -l 2>/dev/null | grep -v "$TAG" > "$tmp" || true
-        [ -n "$TZ_LINE" ] && {
-          grep -q '# woffy-tz' "$tmp" || echo "$TZ_LINE" >> "$tmp"
-        }
-
-        for T in "${TIMES[@]}"; do
-          IFS=':' read -r H M <<< "$T"
-          echo "$M $H * * 1-5 $SCRIPT_PATH_ESCAPED $TYPE $TAG" >> "$tmp"
-        done
-
-        crontab "$tmp"
-        rm -f "$tmp"
-        echo "✅ Programado $TYPE (${TIMES[*]}) de lunes a viernes"
-        ;;
-      *)
-        echo "Uso: woffy schedule {list|clear|pause|resume|timezone <TZ>|report|systemd {enable|disable|status}|entrada [HH:MM]|salida [HH:MM]}"
-        ;;
-    esac
-    ;;
-
-  config)
-    case "${2:-}" in
-      check)
-        if [ ! -f "$CONFIG_FILE" ]; then
-          echo "❌ Config no encontrada: $CONFIG_FILE"
-          exit 1
-        fi
-        if validate_kv_file "$CONFIG_FILE" "config"; then
-          echo "✅ Config valida (sintaxis y claves permitidas)."
-          grep -q '^WURL_USER=' "$CONFIG_FILE" || echo "⚠️ Falta WURL_USER en config."
-          grep -q '^WURL_PASS=' "$CONFIG_FILE" || echo "⚠️ Falta WURL_PASS en config."
-          exit 0
-        else
-          echo "❌ Config invalida o insegura."
-          exit 1
-        fi
-        ;;
-      *)
-        echo "Uso: woffy config check"
-        exit 1
-        ;;
-    esac
+    echo "OK Woffy updated from '$UPDATE_BRANCH'."
     ;;
 
   uninstall)
     check_deps crontab
-    echo "⚠️ Esto eliminará completamente woffy de tu usuario."
-    echo "    - Binario"
-    echo "    - Configuración"
-    echo "    - Token"
-    echo "    - Ficha de usuario"
-    echo "    - Entradas de cron"
-    echo
-    read -r -p "Seguro que quieres continuar? (s/N): " CONFIRM
-
-    case "$CONFIRM" in
-      s|S|y|Y) ;;
-      *) echo "ℹ️ Cancelado."; exit 0 ;;
+    echo "This removes the installed binary, cron entries and $WOFFY_HOME."
+    read -r -p "Continue? (y/N): " CONFIRM
+    case "$CONFIRM" in y | Y | s | S) ;; *)
+      echo "Cancelled."
+      exit 0
+      ;;
     esac
-
-    echo "ℹ️ Eliminando cron..."
     clear_woffy_cron
-
     BIN_PATH="$(get_bin_path)"
-    if [ -n "$BIN_PATH" ]; then
-      echo "ℹ️ Eliminando binario: $BIN_PATH"
-      rm -f "$BIN_PATH"
-    fi
-
-    echo "ℹ️ Eliminando archivos de usuario..."
-    rm -f "$CONFIG_FILE" "$TOKEN_FILE" "$USER_FILE" "$LOG_FILE"
-    rm -rf "$LOCK_DIR"
-
-    echo "✅ woffy desinstalado correctamente."
-    exit 0
+    [ -n "$BIN_PATH" ] && rm -f "$BIN_PATH"
+    rm -rf "$WOFFY_HOME"
+    echo "OK Woffy uninstalled."
     ;;
 
   *)
-    echo "❌ Comando desconocido. Ejecuta 'woffy help' para ver las opciones."
+    echo "ERROR Unknown command. Run 'woffy help'."
     exit 1
     ;;
 esac
-
-
-
-
-
-
