@@ -13,7 +13,7 @@
 - State: `sqlite3`
 - Scheduling: `crontab`, `readlink`
 - Backup: `tar`
-- Optional web: Linux x86_64, Python 3.11+, systemd user services
+- Optional web: Linux x86_64, CPython 3.11-3.13, systemd user services
 
 ## Install Model
 - Installer downloads checksummed executable assets from the latest GitHub Release; the raw script only bootstraps the installer.

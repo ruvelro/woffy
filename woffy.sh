@@ -43,10 +43,10 @@ is_int() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
 validate_bounded_int() {
   local name="$1" value="$2" min="$3" max="$4"
-  is_int "$value" && [ "$value" -ge "$min" ] && [ "$value" -le "$max" ] || {
+  if ! { is_int "$value" && [ "$value" -ge "$min" ] && [ "$value" -le "$max" ]; }; then
     echo "ERROR $name must be an integer between $min and $max" >&2
     return 1
-  }
+  fi
 }
 
 validate_runtime_config() {
@@ -867,10 +867,10 @@ integration_get_token() {
   fi
   client_id="$(db_exec "SELECT client_id FROM integration_credentials WHERE provider='woffu' LIMIT 1;")"
   client_secret="$(db_exec "SELECT client_secret FROM integration_credentials WHERE provider='woffu' LIMIT 1;")"
-  [ -n "$client_id" ] && [ -n "$client_secret" ] || {
+  if ! { [ -n "$client_id" ] && [ -n "$client_secret" ]; }; then
     echo "ERROR Woffu integration is not configured" >&2
     return 1
-  }
+  fi
   response="$(printf '%s' "$client_secret" | curl -sS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" -X POST "$API_URL/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     --data-urlencode "grant_type=client_credentials" \
@@ -1652,11 +1652,11 @@ web_python() {
   local candidate
   for candidate in python3.13 python3.12 python3.11 python3; do
     command -v "$candidate" >/dev/null 2>&1 || continue
-    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)' >/dev/null 2>&1 || continue
+    "$candidate" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] <= (3, 13) else 1)' >/dev/null 2>&1 || continue
     command -v "$candidate"
     return 0
   done
-  echo "ERROR Woffy Web requires Python 3.11 or newer" >&2
+  echo "ERROR Woffy Web requires CPython 3.11, 3.12 or 3.13" >&2
   return 1
 }
 
@@ -1717,10 +1717,10 @@ web_install_release() {
   local channel="${1:-stable}" port="${2:-$WEB_PORT_DEFAULT}" password_stdin="${3:-false}"
   local python asset_base archive checksum expected actual staging release_id release_dir previous_target
   local artifact_version minimum_cli maximum_schema current_number minimum_number schema_version
-  is_int "$port" && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || {
+  if ! { is_int "$port" && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ]; }; then
     echo "ERROR Web port must be between 1024 and 65535" >&2
     return 1
-  }
+  fi
   if [ "$(uname -s)" != "Linux" ] || { [ "$(uname -m)" != "x86_64" ] && [ "$(uname -m)" != "amd64" ]; }; then
     echo "ERROR Woffy Web v3.1 artifacts currently support Linux x86_64 VPS hosts only" >&2
     return 1
@@ -1746,16 +1746,16 @@ web_install_release() {
   fi
   expected="$(awk 'NR==1{print $1}' "$checksum")"
   actual="$(sha256_file "$archive")"
-  [ -n "$expected" ] && [ "$expected" = "$actual" ] || {
+  if ! { [ -n "$expected" ] && [ "$expected" = "$actual" ]; }; then
     echo "ERROR Woffy Web checksum mismatch" >&2
     return 1
-  }
+  fi
   web_verify_archive "$archive"
   tar -xzf "$archive" -C "$staging"
-  [ -f "$staging/app/requirements.lock" ] && [ -d "$staging/app/woffy_web" ] && [ -d "$staging/wheelhouse" ] || {
+  if ! { [ -f "$staging/app/requirements.lock" ] && [ -d "$staging/app/woffy_web" ] && [ -d "$staging/wheelhouse" ]; }; then
     echo "ERROR Incomplete Woffy Web artifact" >&2
     return 1
-  }
+  fi
   artifact_version="$(jq -r '.version // empty' "$staging/app/manifest.json" 2>/dev/null || true)"
   minimum_cli="$(jq -r '.minimum_cli_version // empty' "$staging/app/manifest.json" 2>/dev/null || true)"
   maximum_schema="$(jq -r '.maximum_schema_version // empty' "$staging/app/manifest.json" 2>/dev/null || true)"
@@ -1764,20 +1764,20 @@ web_install_release() {
     return 1
   fi
   current_number="$(semver_number "$VERSION")"
-  [ "$current_number" -ge "$minimum_number" ] || {
+  if ! [ "$current_number" -ge "$minimum_number" ]; then
     echo "ERROR Woffy Web $artifact_version requires CLI $minimum_cli or newer" >&2
     return 1
-  }
-  is_int "$maximum_schema" || {
+  fi
+  if ! is_int "$maximum_schema"; then
     echo "ERROR Invalid maximum schema in Woffy Web manifest" >&2
     return 1
-  }
+  fi
   if [ -f "$DB_FILE" ]; then
     schema_version="$(sqlite3 "$DB_FILE" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
-    is_int "$schema_version" && [ "$schema_version" -le "$maximum_schema" ] || {
+    if ! { is_int "$schema_version" && [ "$schema_version" -le "$maximum_schema" ]; }; then
       echo "ERROR Woffy DB schema $schema_version is newer than the panel supports" >&2
       return 1
-    }
+    fi
   fi
   "$python" -m venv "$staging/venv"
   "$staging/venv/bin/python" -m pip install --disable-pip-version-check --no-index --find-links "$staging/wheelhouse" -r "$staging/app/requirements.lock" >/dev/null
@@ -2162,10 +2162,10 @@ case "${1:-}" in
   events)
     check_deps sqlite3 awk date
     if [ "${2:-}" = "purge" ]; then
-      [ "${3:-}" = "--before" ] && [ -n "${4:-}" ] && [ "${5:-}" = "--yes" ] || {
+      if ! { [ "${3:-}" = "--before" ] && [ -n "${4:-}" ] && [ "${5:-}" = "--yes" ]; }; then
         echo "Usage: woffy events purge --before YYYY-MM-DD --yes"
         exit 1
-      }
+      fi
       PURGED="$(purge_events "$4")"
       echo "OK Purged $PURGED event(s) before $4."
       exit 0
@@ -2383,10 +2383,10 @@ case "${1:-}" in
       exit 1
     fi
     if [ "${2:-}" = "configure" ]; then
-      [ "${3:-}" = "--token-stdin" ] && [ -n "${4:-}" ] || {
+      if ! { [ "${3:-}" = "--token-stdin" ] && [ -n "${4:-}" ]; }; then
         echo "Usage: woffy telegram configure --token-stdin <chat-id> [thread-id] [all|errors|success]"
         exit 1
-      }
+      fi
       IFS= read -r TG_INPUT_TOKEN
       [ -n "$TG_INPUT_TOKEN" ] || {
         echo "ERROR Empty Telegram token" >&2
@@ -2468,10 +2468,10 @@ case "${1:-}" in
         runtime_config_value "$3"
         ;;
       set)
-        [ -n "${3:-}" ] && [ -n "${4:-}" ] || {
+        if ! { [ -n "${3:-}" ] && [ -n "${4:-}" ]; }; then
           echo "Usage: woffy config set <name> <value>"
           exit 1
-        }
+        fi
         runtime_config_set "$3" "$4"
         record_event "" "config" "admin" "success" "Runtime setting changed: $3."
         echo "OK Runtime setting $3 saved."

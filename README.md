@@ -102,7 +102,7 @@ El desarrollo está modularizado en `src/`; `scripts/build-woffy.sh` genera el e
 
 Woffy Web ofrece la operación completa de la CLI desde una interfaz local: usuarios, horarios, fichajes, eventos, guards, informes, logs, integraciones, configuración, backup/restore y actualización.
 
-Requisitos del primer artefacto: VPS Linux x86_64, Python 3.11+ y `systemd --user`. La CLI y cron siguen funcionando aunque el panel no esté instalado.
+Requisitos del primer artefacto: VPS Linux x86_64, CPython 3.11-3.13 y `systemd --user`. La CLI y cron siguen funcionando aunque el panel no esté instalado.
 
 ```bash
 printf '%s\n' "$ADMIN_PASSWORD" | woffy web install --password-stdin

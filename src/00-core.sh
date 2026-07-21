@@ -43,10 +43,10 @@ is_int() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
 validate_bounded_int() {
   local name="$1" value="$2" min="$3" max="$4"
-  is_int "$value" && [ "$value" -ge "$min" ] && [ "$value" -le "$max" ] || {
+  if ! { is_int "$value" && [ "$value" -ge "$min" ] && [ "$value" -le "$max" ]; }; then
     echo "ERROR $name must be an integer between $min and $max" >&2
     return 1
-  }
+  fi
 }
 
 validate_runtime_config() {

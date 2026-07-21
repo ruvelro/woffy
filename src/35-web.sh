@@ -9,11 +9,11 @@ web_python() {
   local candidate
   for candidate in python3.13 python3.12 python3.11 python3; do
     command -v "$candidate" >/dev/null 2>&1 || continue
-    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,11) else 1)' >/dev/null 2>&1 || continue
+    "$candidate" -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] <= (3, 13) else 1)' >/dev/null 2>&1 || continue
     command -v "$candidate"
     return 0
   done
-  echo "ERROR Woffy Web requires Python 3.11 or newer" >&2
+  echo "ERROR Woffy Web requires CPython 3.11, 3.12 or 3.13" >&2
   return 1
 }
 
@@ -74,10 +74,10 @@ web_install_release() {
   local channel="${1:-stable}" port="${2:-$WEB_PORT_DEFAULT}" password_stdin="${3:-false}"
   local python asset_base archive checksum expected actual staging release_id release_dir previous_target
   local artifact_version minimum_cli maximum_schema current_number minimum_number schema_version
-  is_int "$port" && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || {
+  if ! { is_int "$port" && [ "$port" -ge 1024 ] && [ "$port" -le 65535 ]; }; then
     echo "ERROR Web port must be between 1024 and 65535" >&2
     return 1
-  }
+  fi
   if [ "$(uname -s)" != "Linux" ] || { [ "$(uname -m)" != "x86_64" ] && [ "$(uname -m)" != "amd64" ]; }; then
     echo "ERROR Woffy Web v3.1 artifacts currently support Linux x86_64 VPS hosts only" >&2
     return 1
@@ -103,16 +103,16 @@ web_install_release() {
   fi
   expected="$(awk 'NR==1{print $1}' "$checksum")"
   actual="$(sha256_file "$archive")"
-  [ -n "$expected" ] && [ "$expected" = "$actual" ] || {
+  if ! { [ -n "$expected" ] && [ "$expected" = "$actual" ]; }; then
     echo "ERROR Woffy Web checksum mismatch" >&2
     return 1
-  }
+  fi
   web_verify_archive "$archive"
   tar -xzf "$archive" -C "$staging"
-  [ -f "$staging/app/requirements.lock" ] && [ -d "$staging/app/woffy_web" ] && [ -d "$staging/wheelhouse" ] || {
+  if ! { [ -f "$staging/app/requirements.lock" ] && [ -d "$staging/app/woffy_web" ] && [ -d "$staging/wheelhouse" ]; }; then
     echo "ERROR Incomplete Woffy Web artifact" >&2
     return 1
-  }
+  fi
   artifact_version="$(jq -r '.version // empty' "$staging/app/manifest.json" 2>/dev/null || true)"
   minimum_cli="$(jq -r '.minimum_cli_version // empty' "$staging/app/manifest.json" 2>/dev/null || true)"
   maximum_schema="$(jq -r '.maximum_schema_version // empty' "$staging/app/manifest.json" 2>/dev/null || true)"
@@ -121,20 +121,20 @@ web_install_release() {
     return 1
   fi
   current_number="$(semver_number "$VERSION")"
-  [ "$current_number" -ge "$minimum_number" ] || {
+  if ! [ "$current_number" -ge "$minimum_number" ]; then
     echo "ERROR Woffy Web $artifact_version requires CLI $minimum_cli or newer" >&2
     return 1
-  }
-  is_int "$maximum_schema" || {
+  fi
+  if ! is_int "$maximum_schema"; then
     echo "ERROR Invalid maximum schema in Woffy Web manifest" >&2
     return 1
-  }
+  fi
   if [ -f "$DB_FILE" ]; then
     schema_version="$(sqlite3 "$DB_FILE" 'PRAGMA user_version;' 2>/dev/null || echo 0)"
-    is_int "$schema_version" && [ "$schema_version" -le "$maximum_schema" ] || {
+    if ! { is_int "$schema_version" && [ "$schema_version" -le "$maximum_schema" ]; }; then
       echo "ERROR Woffy DB schema $schema_version is newer than the panel supports" >&2
       return 1
-    }
+    fi
   fi
   "$python" -m venv "$staging/venv"
   "$staging/venv/bin/python" -m pip install --disable-pip-version-check --no-index --find-links "$staging/wheelhouse" -r "$staging/app/requirements.lock" >/dev/null

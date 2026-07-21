@@ -39,4 +39,4 @@
 - `Confirmed`: `systemd --user` operates the persistent service; foreground `woffy web serve` is the fallback.
 
 ## Local System
-- CLI tools remain unchanged. Installing the optional web companion additionally requires Linux x86_64 and Python 3.11+.
+- CLI tools remain unchanged. Installing the optional web companion additionally requires Linux x86_64 and CPython 3.11-3.13.

@@ -11,7 +11,9 @@ cp -R "$repo_dir/web/woffy_web" "$tmp/app/"
 cp "$repo_dir/web/requirements.lock" "$tmp/app/requirements.lock"
 cp "$repo_dir/web/manifest.json" "$tmp/app/manifest.json"
 cp "$repo_dir/web/THIRD_PARTY_NOTICES.md" "$tmp/app/THIRD_PARTY_NOTICES.md"
-"$python" -m pip download --only-binary=:all: --platform manylinux2014_x86_64 --python-version 311 --implementation cp --abi cp311 --dest "$tmp/wheelhouse" -r "$repo_dir/web/requirements.lock"
+for py_version in 311 312 313; do
+  "$python" -m pip download --only-binary=:all: --platform manylinux2014_x86_64 --python-version "$py_version" --implementation cp --abi "cp$py_version" --dest "$tmp/wheelhouse" -r "$repo_dir/web/requirements.lock"
+done
 COPYFILE_DISABLE=1 tar --no-xattrs -czf "$out_dir/woffy-web.tar.gz" -C "$tmp" app wheelhouse
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$out_dir" && sha256sum woffy-web.tar.gz >woffy-web.sha256)

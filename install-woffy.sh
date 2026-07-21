@@ -39,18 +39,18 @@ if [ "$SHA_TOOL" = "sha256sum" ]; then
 else
   actual="$(shasum -a 256 "$tmp_bin" | awk '{print $1}')"
 fi
-[ -n "$expected" ] && [ "$expected" = "$actual" ] || {
+if ! { [ -n "$expected" ] && [ "$expected" = "$actual" ]; }; then
   echo "ERROR Download checksum mismatch" >&2
   exit 1
-}
+fi
 bash -n "$tmp_bin"
 chmod +x "$tmp_bin"
 expected_version="$(sed -n '1{s/^v//;p;}' "$tmp_version")"
 binary_version="$("$tmp_bin" version | awk '/^woffy v/{sub(/^woffy v/,"");print;exit}')"
-[ -n "$expected_version" ] && [ "$expected_version" = "$binary_version" ] || {
+if ! { [ -n "$expected_version" ] && [ "$expected_version" = "$binary_version" ]; }; then
   echo "ERROR Downloaded binary version does not match release metadata" >&2
   exit 1
-}
+fi
 mv "$tmp_bin" "$INSTALL_PATH"
 echo "woffy installed at $INSTALL_PATH"
 

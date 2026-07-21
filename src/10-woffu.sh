@@ -109,10 +109,10 @@ integration_get_token() {
   fi
   client_id="$(db_exec "SELECT client_id FROM integration_credentials WHERE provider='woffu' LIMIT 1;")"
   client_secret="$(db_exec "SELECT client_secret FROM integration_credentials WHERE provider='woffu' LIMIT 1;")"
-  [ -n "$client_id" ] && [ -n "$client_secret" ] || {
+  if ! { [ -n "$client_id" ] && [ -n "$client_secret" ]; }; then
     echo "ERROR Woffu integration is not configured" >&2
     return 1
-  }
+  fi
   response="$(printf '%s' "$client_secret" | curl -sS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" -X POST "$API_URL/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     --data-urlencode "grant_type=client_credentials" \

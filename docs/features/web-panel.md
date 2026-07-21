@@ -14,5 +14,5 @@
 ## Maintenance And Delivery
 - `Confirmed`: backup, restore with fallback, doctor, self-test, changelog, stable/nightly update, downgrade and uninstall are represented.
 - `Confirmed`: SQLite reads are read-only and every mutation is an allowlisted `shell=False` CLI subprocess with a correlation ID.
-- `Confirmed`: the first release artifact supports Linux x86_64/Python 3.11+, includes offline wheels and vendored HTMX, and is verified by SHA-256.
+- `Confirmed`: the first release artifact supports Linux x86_64/CPython 3.11-3.13, includes offline wheels and vendored HTMX, and is verified by SHA-256.
 - `Confirmed`: the CLI remains independent when the panel is absent or stopped.

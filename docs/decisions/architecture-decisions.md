@@ -54,4 +54,4 @@
 - Date: 2026-07-21
 - Status: Accepted
 - Decision: publish the app, pinned Linux x86_64 wheelhouse and vendored HTMX as one SHA-256-protected archive.
-- Consequences: VPS installation does not contact PyPI/CDNs, Python 3.11+ is required, and other architectures remain backlog work.
+- Consequences: VPS installation does not contact PyPI/CDNs, CPython 3.11-3.13 is required, and other architectures remain backlog work.

@@ -254,10 +254,10 @@ case "${1:-}" in
   events)
     check_deps sqlite3 awk date
     if [ "${2:-}" = "purge" ]; then
-      [ "${3:-}" = "--before" ] && [ -n "${4:-}" ] && [ "${5:-}" = "--yes" ] || {
+      if ! { [ "${3:-}" = "--before" ] && [ -n "${4:-}" ] && [ "${5:-}" = "--yes" ]; }; then
         echo "Usage: woffy events purge --before YYYY-MM-DD --yes"
         exit 1
-      }
+      fi
       PURGED="$(purge_events "$4")"
       echo "OK Purged $PURGED event(s) before $4."
       exit 0
@@ -475,10 +475,10 @@ case "${1:-}" in
       exit 1
     fi
     if [ "${2:-}" = "configure" ]; then
-      [ "${3:-}" = "--token-stdin" ] && [ -n "${4:-}" ] || {
+      if ! { [ "${3:-}" = "--token-stdin" ] && [ -n "${4:-}" ]; }; then
         echo "Usage: woffy telegram configure --token-stdin <chat-id> [thread-id] [all|errors|success]"
         exit 1
-      }
+      fi
       IFS= read -r TG_INPUT_TOKEN
       [ -n "$TG_INPUT_TOKEN" ] || {
         echo "ERROR Empty Telegram token" >&2
@@ -560,10 +560,10 @@ case "${1:-}" in
         runtime_config_value "$3"
         ;;
       set)
-        [ -n "${3:-}" ] && [ -n "${4:-}" ] || {
+        if ! { [ -n "${3:-}" ] && [ -n "${4:-}" ]; }; then
           echo "Usage: woffy config set <name> <value>"
           exit 1
-        }
+        fi
         runtime_config_set "$3" "$4"
         record_event "" "config" "admin" "success" "Runtime setting changed: $3."
         echo "OK Runtime setting $3 saved."
