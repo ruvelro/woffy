@@ -39,3 +39,19 @@
 - Date: 2026-07-21
 - Status: Accepted
 - Decision: maintain canonical Bash modules under `src/` and generate `woffy.sh`; keep single-file runtime distribution.
+
+## ADR-007: Optional Loopback Web Companion
+- Date: 2026-07-21
+- Status: Accepted
+- Decision: deliver FastAPI/Jinja/HTMX as an optional Linux companion, bind only to loopback and use SSH forwarding.
+- Rationale: operators need a clearer interface without making the single-file CLI or SQLite state dependent on a permanent public service.
+- Consequences:
+  - Read models use SQLite read-only connections; all mutations cross the existing CLI validation/lock boundary.
+  - Authentication, sessions, jobs and web audit live in a separate protected DB.
+  - Destructive operations require CSRF, recent password verification and exact confirmation.
+
+## ADR-008: Offline Checksummed Web Releases
+- Date: 2026-07-21
+- Status: Accepted
+- Decision: publish the app, pinned Linux x86_64 wheelhouse and vendored HTMX as one SHA-256-protected archive.
+- Consequences: VPS installation does not contact PyPI/CDNs, Python 3.11+ is required, and other architectures remain backlog work.

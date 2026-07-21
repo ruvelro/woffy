@@ -59,3 +59,16 @@
 2. Verify SemVer, SHA-256 and Bash syntax before replacement.
 3. Preserve the current executable as `.previous`.
 4. Replace atomically and restore `.previous` if the post-check fails.
+
+## Web Request Flow
+1. The browser reaches loopback through an SSH tunnel and authenticates against the Argon2id admin hash.
+2. The server validates the session, Host header and CSRF token; every critical action additionally rechecks the password and an exact phrase.
+3. Read pages query `woffy.db` with a read-only SQLite connection and bounded filters.
+4. Mutations are mapped to fixed CLI argument arrays; secrets are passed by stdin and a generated `WOFFY_REQUEST_ID` correlates CLI events with web audit.
+5. Exit status and redacted output are stored in the separate web audit DB, then the page re-queries current state.
+
+## Web Maintenance Flow
+1. Backup writes only into the protected web backup directory and may be downloaded by basename.
+2. Restore uploads receive generated names and size limits, create a pre-restore backup, run CLI validation and roll back if the post-check fails.
+3. Update creates a backup, updates the CLI with its existing rollback, schedules the panel update in a detached systemd unit and health-checks the new release.
+4. Uninstall creates a recovery archive outside `~/.woffy`, removes panel/CLI state and then stops the service; the browser is expected to disconnect.

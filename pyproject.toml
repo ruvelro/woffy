@@ -1,0 +1,12 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "S", "B"]
+ignore = ["S101", "E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["S105", "S106", "S603", "S607"]
+"web/woffy_web/cli.py" = ["S603"]
+"web/woffy_web/woffy_db.py" = ["S608"]

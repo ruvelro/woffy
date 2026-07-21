@@ -2,6 +2,31 @@
 
 ## Completed Tasks
 
+### WFY-026
+- Title: Add persistent runtime configuration and secure web correlation boundary
+- Completed on: 2026-07-21
+- Outcome: bounded settings persist in SQLite with environment precedence; Telegram secrets use stdin and events carry request IDs.
+
+### WFY-027
+- Title: Deliver local web foundation and security controls
+- Completed on: 2026-07-21
+- Outcome: loopback FastAPI/HTMX panel, Argon2id auth, sessions, CSRF, throttling, audit DB, systemd service and SSH-tunnel workflow implemented.
+
+### WFY-028
+- Title: Deliver full daily-operation web pages
+- Completed on: 2026-07-21
+- Outcome: dashboards, users, schedules/preview, attendance, events/guards, reports, logs, integrations and settings delegate writes to the CLI.
+
+### WFY-029
+- Title: Add critical web maintenance with reauthentication and recovery
+- Completed on: 2026-07-21
+- Outcome: backup/download, restore rollback, purge, update, downgrade and uninstall require reinforced confirmations and record jobs/audit.
+
+### WFY-030
+- Title: Package and verify the optional web companion
+- Completed on: 2026-07-21
+- Outcome: offline checksummed release artifact, vendored HTMX, current/previous health rollback, pytest, Playwright and VPS install smoke coverage added.
+
 ### WFY-AUDIT-001
 - Title: Audit existing repository and create operational documentation baseline
 - Completed on: 2026-03-14

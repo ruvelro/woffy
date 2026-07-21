@@ -33,15 +33,18 @@ jobs:
           printf '%s\n' "$version" > woffy.version
           sha256sum woffy > woffy.sha256
           bash -n woffy
+          python3 --version
+          bash scripts/build-web-artifact.sh dist
+          cp dist/woffy-web.tar.gz dist/woffy-web.sha256 dist/woffy-web.version .
       - name: Publish stable release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" woffy woffy.version woffy.sha256 --generate-notes --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" woffy woffy.version woffy.sha256 woffy-web.tar.gz woffy-web.version woffy-web.sha256 --generate-notes --verify-tag
       - name: Publish rolling nightly
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete nightly --cleanup-tag --yes || true
-          gh release create nightly woffy woffy.version woffy.sha256 --prerelease --title "Woffy nightly" --target "$GITHUB_SHA"
+          gh release create nightly woffy woffy.version woffy.sha256 woffy-web.tar.gz woffy-web.version woffy-web.sha256 --prerelease --title "Woffy nightly" --target "$GITHUB_SHA"

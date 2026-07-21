@@ -1,0 +1,14 @@
+-r requirements.lock
+httpx==0.28.1
+pytest==8.4.2
+playwright==1.60.0
+ruff==0.15.22
+certifi==2026.6.17
+greenlet==3.2.5
+httpcore==1.0.9
+iniconfig==2.1.0
+packaging==26.2
+pluggy==1.6.0
+Pygments==2.20.0
+pyee==13.0.1
+tomli==2.4.1

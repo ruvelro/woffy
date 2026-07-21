@@ -1,10 +1,10 @@
-# woffy v3.0.0
+# woffy v3.1.0
 
 CLI multiusuario para automatizar fichajes de Woffu desde un VPS administrado de forma centralizada.
 
 ## Instalación
 
-Tras publicar el release `v3.0.0`:
+Tras publicar el release correspondiente:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash
@@ -74,8 +74,10 @@ Usa OAuth `client_credentials` y `/api/v1/signs`. No existe fallback mediante en
 woffy events all|<email> [--days N] [--status STATUS] [--format text|json|csv] [--limit N]
 woffy events purge --before YYYY-MM-DD --yes
 woffy report all [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format text|json|csv] [telegram]
-woffy telegram <token> <chat-id> [thread-id] [all|errors|success]
+printf '%s\n' "$TG_TOKEN" | woffy telegram configure --token-stdin <chat-id> [thread-id] [all|errors|success]
 woffy telegram test
+woffy telegram clear
+woffy config list|get|set|reset
 woffy doctor [--json]
 woffy backup [path.tar.gz]
 woffy restore <path.tar.gz>
@@ -95,6 +97,22 @@ woffy update --allow-downgrade
 El actualizador usa GitHub Releases, verifica versión, SHA-256 y sintaxis, conserva `woffy.previous` y restaura el binario anterior si falla el post-check.
 
 El desarrollo está modularizado en `src/`; `scripts/build-woffy.sh` genera el ejecutable distribuible y `--check` detecta divergencias.
+
+## Panel web opcional
+
+Woffy Web ofrece la operación completa de la CLI desde una interfaz local: usuarios, horarios, fichajes, eventos, guards, informes, logs, integraciones, configuración, backup/restore y actualización.
+
+Requisitos del primer artefacto: VPS Linux x86_64, Python 3.11+ y `systemd --user`. La CLI y cron siguen funcionando aunque el panel no esté instalado.
+
+```bash
+printf '%s\n' "$ADMIN_PASSWORD" | woffy web install --password-stdin
+woffy web status
+ssh -L 8787:127.0.0.1:8787 <usuario>@<vps>
+```
+
+Después se abre `http://127.0.0.1:8787` en el equipo local. El servicio nunca escucha en una interfaz externa. Otros comandos: `woffy web start|stop|restart|logs|passwd|update|uninstall` y `woffy web serve` como alternativa en primer plano.
+
+La clave web se guarda con Argon2id. Las sesiones, trabajos y auditoría viven en `~/.woffy/web/web.db`; las lecturas de la DB principal usan modo SQLite read-only y las escrituras se delegan a la CLI mediante una allowlist sin shell.
 
 ## Licencia
 

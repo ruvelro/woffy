@@ -1,0 +1,5 @@
+{% extends "base.html" %}{% block title %}Logs{% endblock %}{% block content %}
+<div class="page-head"><div><p class="eyebrow">Diagnóstico</p><h1>Logs de Woffy</h1><p>Últimas 500 líneas; la vista recibe nuevas entradas en tiempo real.</p></div></div><section class="terminal"><pre id="log-output">{% for line in lines %}{{ line }}
+{% endfor %}</pre></section><script src="/static/log-stream.js" defer></script>
+{% endblock %}
+

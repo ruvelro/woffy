@@ -13,3 +13,7 @@
 - `Event window`: the lookback period used by `woffy events`, commonly 30 or 60 days.
 - `Inactive worker`: a worker with `active=0`; retained in DB but skipped by sign flows and `run due`.
 - `Telegram admin`: one global Telegram destination for multi-user notifications and reports.
+- `Woffy Web`: optional loopback-only administrative companion for the CLI.
+- `Web audit`: separate record of administrative action, target, result and request ID; it survives restoration of the main DB.
+- `Critical confirmation`: exact target/phrase plus recent administrator-password verification required for destructive web actions.
+- `Deferred web update`: detached systemd job that can replace and restart the panel without killing its own updater subprocess.

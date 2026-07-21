@@ -8,14 +8,21 @@
 - `LICENSE`: GPL-3.0-only license notice.
 - `src/*.sh`: canonical Bash modules used to generate the distribution.
 - `scripts/build-woffy.sh`: deterministic build and synchronization check.
+- `scripts/build-web-artifact.sh`: builds the checksummed offline Linux web payload.
+- `scripts/vendor-web-assets.sh`: downloads the pinned HTMX asset and verifies its SHA-256.
+- `web/woffy_web/`: FastAPI application, security/store/CLI adapters, templates and local assets.
+- `web/THIRD_PARTY_NOTICES.md`: license notice for vendored browser assets.
 
 ## CI
-- `.github/workflows/shell-ci.yml`: blocking lint plus Ubuntu/macOS tests and VPS update smoke test.
+- `.github/workflows/shell-ci.yml`: blocking Bash matrix plus Python, HTTP, Chromium and web install tests.
 - `.github/workflows/release.yml`: stable-tag and rolling-nightly release asset publisher.
 
 ## Tests
 - `tests/woffy.bats`: Bats suite using real SQLite and mocked HTTP/cron, including migration, scheduler, API and updater failures.
 - `tests/vps-update-smoke.sh`: v2-to-v3 update and rollback simulation.
+- `tests/test_web.py`: HTTP integration and web security coverage.
+- `tests/test_web_e2e.py`: real Chromium login/navigation/action smoke test.
+- `tests/web-install-smoke.sh`: offline artifact installation, serving and checksum rollback on Linux.
 
 ## Docs
 - `docs/architecture.md`: current SQLite architecture.

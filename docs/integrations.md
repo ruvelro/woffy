@@ -16,6 +16,7 @@
 - Base URL pattern: `https://api.telegram.org/bot<TG_TOKEN>/sendMessage`
 - `Confirmed`: settings are global DB keys: `TG_TOKEN`, `TG_CHAT_ID`, `TG_THREAD`, `TG_NOTIFY`.
 - `Confirmed`: messages include worker identity when emitted from user-specific operations.
+- `Confirmed`: web configuration passes the bot token through stdin and never exposes it in argv or rendered pages.
 
 ## SQLite
 - `Confirmed`: `sqlite3` CLI is required at runtime.
@@ -29,6 +30,13 @@
   - installer script bootstrap
   - checksummed stable and nightly release assets for install/self-update
   - changelog
+  - optional checksummed web archive with its offline Python wheelhouse
+
+## Woffy Web
+- `Confirmed`: FastAPI, Uvicorn, Jinja, python-multipart and Argon2 dependencies are pinned in the release artifact.
+- `Confirmed`: HTMX 2.0.4 is vendored at build time after verifying a pinned SHA-256; no runtime CDN is used.
+- `Confirmed`: the panel binds only to `127.0.0.1` and relies on SSH port forwarding rather than public HTTPS.
+- `Confirmed`: `systemd --user` operates the persistent service; foreground `woffy web serve` is the fallback.
 
 ## Local System
-- Required tools include `bash`, `curl`, `jq`, `awk`, `date`, `sqlite3`, `tar`, `crontab`, and `readlink`.
+- CLI tools remain unchanged. Installing the optional web companion additionally requires Linux x86_64 and Python 3.11+.

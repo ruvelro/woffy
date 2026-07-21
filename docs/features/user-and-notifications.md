@@ -16,3 +16,4 @@
 - `Confirmed`: Telegram tests and requested report delivery fail visibly when configuration/delivery fails.
 - `Confirmed`: positional login passwords are deprecated; prompt and stdin forms avoid shell history/process arguments.
 - `Confirmed`: company API credentials are configured separately with `woffy api` and secret stdin/prompt.
+- `Confirmed`: `woffy telegram configure --token-stdin ...` keeps the bot token out of process arguments; positional token syntax remains deprecated for compatibility.

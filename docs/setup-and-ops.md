@@ -1,11 +1,11 @@
 # Setup And Ops
 
 ## Repo Stack
-- Language: Bash
-- Delivery: single executable script
+- Languages: Bash CLI; optional Python web companion
+- Delivery: single CLI executable plus optional checksummed web archive
 - State: SQLite
 - CI: GitHub Actions on Ubuntu
-- Test framework: Bats
+- Test frameworks: Bats, pytest and Playwright
 
 ## Runtime Dependencies
 - Base: `bash`, `curl`, `date`, `awk`
@@ -13,6 +13,7 @@
 - State: `sqlite3`
 - Scheduling: `crontab`, `readlink`
 - Backup: `tar`
+- Optional web: Linux x86_64, Python 3.11+, systemd user services
 
 ## Install Model
 - Installer downloads checksummed executable assets from the latest GitHub Release; the raw script only bootstraps the installer.
@@ -24,6 +25,9 @@
 - `~/.woffy/woffy.db`
 - `~/.woffy/woffy.log`
 - `~/.woffy/woffy.lock.d`
+- `~/.woffy/web/web.db` and `config.json` for optional web-only state
+- `~/.local/share/woffy-web/current` and `previous` release links
+- `~/.local/state/woffy-backups` for recovery archives that must survive uninstall
 
 ## Operational Commands
 - Worker setup: `woffy login <email>` or `--password-stdin`, `woffy users`, `woffy user <email>`, `woffy users enable|disable|delete <email>`.
@@ -31,11 +35,25 @@
 - Scheduling: `woffy run due`, `woffy schedule install`, `woffy schedule list`, `woffy schedule clear`, `woffy schedule user <email> ...`.
 - Investigation: `woffy events all`, `woffy events <email> --days 30|60 --status error`.
 - Reporting: `woffy report all`.
-- Maintenance: `woffy doctor`, `woffy self-test`, `woffy config check`, `woffy backup`, `woffy restore`, `woffy changelog`, `woffy update`.
+- Maintenance: `woffy doctor`, `woffy self-test`, `woffy config`, `woffy backup`, `woffy restore`, `woffy changelog`, `woffy update`.
+
+## Optional Web Panel
+
+```bash
+printf '%s\n' "$ADMIN_PASSWORD" | woffy web install --password-stdin
+systemctl --user status woffy-web.service
+ssh -L 8787:127.0.0.1:8787 user@vps
+```
+
+Open `http://127.0.0.1:8787` locally. Do not change the bind address or expose port 8787 publicly. If the VPS does not retain user services after logout, enable user lingering according to the host policy; otherwise run `woffy web serve` in a managed foreground session.
+
+Use `woffy web passwd` to rotate the administrator password and invalidate all sessions. `woffy web update stable|nightly` stages and health-checks a release; `current` is restored to `previous` on failure. `woffy web uninstall` removes only the panel and preserves CLI data.
+
+The runtime configuration interface accepts only documented bounded integer keys. Persistent SQLite values are used unless the corresponding `WOFFY_*` environment variable is set.
 
 ## CI And Verification
-- CI installs `shellcheck`, `shfmt`, `bats`, and `sqlite3`.
-- CI treats shellcheck and shfmt as blocking, runs Bats on Ubuntu/macOS, verifies generated output and simulates VPS update/rollback.
+- CI installs Bash tooling plus Python/Playwright.
+- CI blocks on shellcheck, shfmt, Bats, pytest, Chromium E2E, generated output, CLI VPS update and offline web install/rollback.
 
 ## systemd User Equivalent
 Cron remains the supported installer path. It must be cleared before enabling this alternative.

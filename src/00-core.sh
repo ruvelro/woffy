@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="3.0.0"
+VERSION="3.1.0"
 
 WOFFY_HOME="${WOFFY_HOME:-$HOME/.woffy}"
 DB_FILE="${WOFFY_DB_FILE:-$WOFFY_HOME/woffy.db}"
@@ -20,6 +20,9 @@ SQLITE_BUSY_MS="${WOFFY_SQLITE_BUSY_MS:-5000}"
 SCHEDULE_MAX_ATTEMPTS="${WOFFY_SCHEDULE_MAX_ATTEMPTS:-3}"
 CLAIM_LEASE_SECONDS="${WOFFY_CLAIM_LEASE_SECONDS:-120}"
 RUN_GUARD_RETENTION_DAYS="${WOFFY_RUN_GUARD_RETENTION_DAYS:-30}"
+LOG_MAX_BYTES="${WOFFY_LOG_MAX_BYTES:-1048576}"
+LOG_MAX_FILES="${WOFFY_LOG_MAX_FILES:-5}"
+REQUEST_ID="${WOFFY_REQUEST_ID:-}"
 
 NO_TELEGRAM=false
 QUIET=false
@@ -35,9 +38,6 @@ if [ "$#" -gt 0 ]; then
   done
   set -- "${FILTERED_ARGS[@]}"
 fi
-
-LOG_MAX_BYTES_DEFAULT=1048576
-LOG_MAX_FILES_DEFAULT=5
 
 is_int() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
 
@@ -59,6 +59,8 @@ validate_runtime_config() {
   validate_bounded_int WOFFY_SCHEDULE_MAX_ATTEMPTS "$SCHEDULE_MAX_ATTEMPTS" 1 10
   validate_bounded_int WOFFY_CLAIM_LEASE_SECONDS "$CLAIM_LEASE_SECONDS" 30 600
   validate_bounded_int WOFFY_RUN_GUARD_RETENTION_DAYS "$RUN_GUARD_RETENTION_DAYS" 1 3650
+  validate_bounded_int WOFFY_LOG_MAX_BYTES "$LOG_MAX_BYTES" 1024 1073741824
+  validate_bounded_int WOFFY_LOG_MAX_FILES "$LOG_MAX_FILES" 1 100
 }
 
 json_escape() {
@@ -88,10 +90,8 @@ ensure_home() {
 rotate_log_if_needed() {
   [ -f "$LOG_FILE" ] || return 0
   local max_bytes max_files size i prev next
-  max_bytes="${WOFFY_LOG_MAX_BYTES:-$LOG_MAX_BYTES_DEFAULT}"
-  max_files="${WOFFY_LOG_MAX_FILES:-$LOG_MAX_FILES_DEFAULT}"
-  is_int "$max_bytes" || max_bytes="$LOG_MAX_BYTES_DEFAULT"
-  is_int "$max_files" || max_files="$LOG_MAX_FILES_DEFAULT"
+  max_bytes="$LOG_MAX_BYTES"
+  max_files="$LOG_MAX_FILES"
   [ "$max_files" -lt 1 ] && max_files=1
   size="$(wc -c <"$LOG_FILE" 2>/dev/null || echo 0)"
   is_int "$size" || size=0
@@ -169,7 +169,8 @@ CREATE TABLE IF NOT EXISTS events(
   kind TEXT NOT NULL,
   status TEXT NOT NULL,
   message TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  request_id TEXT
 );
 CREATE TABLE IF NOT EXISTS run_guard(
   email TEXT NOT NULL,
@@ -205,13 +206,15 @@ SQL
   ensure_run_guard_column next_retry_at "TEXT"
   ensure_run_guard_column last_error "TEXT"
   ensure_run_guard_column updated_at "TEXT"
+  ensure_table_column events request_id "TEXT"
   db_exec "CREATE TABLE IF NOT EXISTS integration_credentials(provider TEXT PRIMARY KEY,client_id TEXT NOT NULL,client_secret TEXT NOT NULL,updated_at TEXT NOT NULL);
            CREATE TABLE IF NOT EXISTS integration_tokens(provider TEXT PRIMARY KEY,token TEXT,expires_at INTEGER,updated_at TEXT NOT NULL);
            CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
+           CREATE INDEX IF NOT EXISTS idx_events_request_id ON events(request_id);
            CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(active,time_hhmm,email);
            CREATE INDEX IF NOT EXISTS idx_run_guard_state ON run_guard(state,next_retry_at,claimed_at);
            PRAGMA journal_mode=WAL;
-           PRAGMA user_version=3;" >/dev/null
+           PRAGMA user_version=4;" >/dev/null
   chmod 600 "$DB_FILE" 2>/dev/null || true
   DB_READY=true
 }
@@ -221,6 +224,160 @@ ensure_run_guard_column() {
   if ! sqlite3 "$DB_FILE" "PRAGMA table_info(run_guard);" | awk -F'|' -v column="$column" '$2==column{found=1} END{exit !found}'; then
     sqlite3 -cmd ".timeout $SQLITE_BUSY_MS" "$DB_FILE" "ALTER TABLE run_guard ADD COLUMN $column $definition;"
   fi
+}
+
+ensure_table_column() {
+  local table="$1" column="$2" definition="$3"
+  if ! sqlite3 "$DB_FILE" "PRAGMA table_info($table);" | awk -F'|' -v column="$column" '$2==column{found=1} END{exit !found}'; then
+    sqlite3 -cmd ".timeout $SQLITE_BUSY_MS" "$DB_FILE" "ALTER TABLE $table ADD COLUMN $column $definition;"
+  fi
+}
+
+runtime_setting_key() {
+  case "$1" in
+    curl_connect_timeout) echo RUNTIME_CURL_CONNECT_TIMEOUT ;;
+    curl_max_time) echo RUNTIME_CURL_MAX_TIME ;;
+    max_parallel) echo RUNTIME_MAX_PARALLEL ;;
+    catchup_minutes) echo RUNTIME_CATCHUP_MINUTES ;;
+    jitter_max) echo RUNTIME_JITTER_MAX ;;
+    sqlite_busy_ms) echo RUNTIME_SQLITE_BUSY_MS ;;
+    schedule_max_attempts) echo RUNTIME_SCHEDULE_MAX_ATTEMPTS ;;
+    claim_lease_seconds) echo RUNTIME_CLAIM_LEASE_SECONDS ;;
+    run_guard_retention_days) echo RUNTIME_RUN_GUARD_RETENTION_DAYS ;;
+    log_max_bytes) echo RUNTIME_LOG_MAX_BYTES ;;
+    log_max_files) echo RUNTIME_LOG_MAX_FILES ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_setting_bounds() {
+  case "$1" in
+    curl_connect_timeout | curl_max_time) echo "1 120" ;;
+    max_parallel) echo "1 16" ;;
+    catchup_minutes) echo "1 60" ;;
+    jitter_max) echo "0 30" ;;
+    sqlite_busy_ms) echo "100 60000" ;;
+    schedule_max_attempts) echo "1 10" ;;
+    claim_lease_seconds) echo "30 600" ;;
+    run_guard_retention_days) echo "1 3650" ;;
+    log_max_bytes) echo "1024 1073741824" ;;
+    log_max_files) echo "1 100" ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_setting_default() {
+  case "$1" in
+    curl_connect_timeout) echo 5 ;;
+    curl_max_time) echo 15 ;;
+    max_parallel) echo 4 ;;
+    catchup_minutes) echo 5 ;;
+    jitter_max) echo 0 ;;
+    sqlite_busy_ms) echo 5000 ;;
+    schedule_max_attempts) echo 3 ;;
+    claim_lease_seconds) echo 120 ;;
+    run_guard_retention_days) echo 30 ;;
+    log_max_bytes) echo 1048576 ;;
+    log_max_files) echo 5 ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_setting_env() {
+  case "$1" in
+    curl_connect_timeout) echo WOFFY_CURL_CONNECT_TIMEOUT ;;
+    curl_max_time) echo WOFFY_CURL_MAX_TIME ;;
+    max_parallel) echo WOFFY_MAX_PARALLEL ;;
+    catchup_minutes) echo WOFFY_CATCHUP_MINUTES ;;
+    jitter_max) echo WOFFY_JITTER_MAX ;;
+    sqlite_busy_ms) echo WOFFY_SQLITE_BUSY_MS ;;
+    schedule_max_attempts) echo WOFFY_SCHEDULE_MAX_ATTEMPTS ;;
+    claim_lease_seconds) echo WOFFY_CLAIM_LEASE_SECONDS ;;
+    run_guard_retention_days) echo WOFFY_RUN_GUARD_RETENTION_DAYS ;;
+    log_max_bytes) echo WOFFY_LOG_MAX_BYTES ;;
+    log_max_files) echo WOFFY_LOG_MAX_FILES ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_setting_assign() {
+  local name="$1" value="$2"
+  case "$name" in
+    curl_connect_timeout) CURL_CONNECT_TIMEOUT="$value" ;;
+    curl_max_time) CURL_MAX_TIME="$value" ;;
+    max_parallel) MAX_PARALLEL="$value" ;;
+    catchup_minutes) CATCHUP_MINUTES="$value" ;;
+    jitter_max) JITTER_MAX="$value" ;;
+    sqlite_busy_ms) SQLITE_BUSY_MS="$value" ;;
+    schedule_max_attempts) SCHEDULE_MAX_ATTEMPTS="$value" ;;
+    claim_lease_seconds) CLAIM_LEASE_SECONDS="$value" ;;
+    run_guard_retention_days) RUN_GUARD_RETENTION_DAYS="$value" ;;
+    log_max_bytes) LOG_MAX_BYTES="$value" ;;
+    log_max_files) LOG_MAX_FILES="$value" ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_config_names() {
+  echo "curl_connect_timeout curl_max_time max_parallel catchup_minutes jitter_max sqlite_busy_ms schedule_max_attempts claim_lease_seconds run_guard_retention_days log_max_bytes log_max_files"
+}
+
+load_persisted_runtime_config() {
+  local name key env_name value
+  [ -f "$DB_FILE" ] || return 0
+  command -v sqlite3 >/dev/null 2>&1 || return 0
+  sqlite3 "$DB_FILE" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings';" 2>/dev/null | grep -q 1 || return 0
+  for name in $(runtime_config_names); do
+    env_name="$(runtime_setting_env "$name")"
+    eval "value=\${$env_name-}"
+    [ -n "$value" ] && continue
+    key="$(runtime_setting_key "$name")"
+    value="$(sqlite3 "$DB_FILE" "SELECT value FROM settings WHERE key='$key' LIMIT 1;" 2>/dev/null || true)"
+    [ -n "$value" ] && runtime_setting_assign "$name" "$value"
+  done
+  return 0
+}
+
+runtime_config_value() {
+  case "$1" in
+    curl_connect_timeout) echo "$CURL_CONNECT_TIMEOUT" ;;
+    curl_max_time) echo "$CURL_MAX_TIME" ;;
+    max_parallel) echo "$MAX_PARALLEL" ;;
+    catchup_minutes) echo "$CATCHUP_MINUTES" ;;
+    jitter_max) echo "$JITTER_MAX" ;;
+    sqlite_busy_ms) echo "$SQLITE_BUSY_MS" ;;
+    schedule_max_attempts) echo "$SCHEDULE_MAX_ATTEMPTS" ;;
+    claim_lease_seconds) echo "$CLAIM_LEASE_SECONDS" ;;
+    run_guard_retention_days) echo "$RUN_GUARD_RETENTION_DAYS" ;;
+    log_max_bytes) echo "$LOG_MAX_BYTES" ;;
+    log_max_files) echo "$LOG_MAX_FILES" ;;
+    *) return 1 ;;
+  esac
+}
+
+runtime_config_validate_value() {
+  local name="$1" value="$2" bounds min max
+  bounds="$(runtime_setting_bounds "$name")" || return 1
+  read -r min max <<<"$bounds"
+  is_int "$value" && [ "$value" -ge "$min" ] && [ "$value" -le "$max" ]
+}
+
+runtime_config_set() {
+  local name="$1" value="$2" key
+  runtime_config_validate_value "$name" "$value" || {
+    echo "ERROR Invalid runtime setting '$name' or value '$value'" >&2
+    return 1
+  }
+  key="$(runtime_setting_key "$name")"
+  settings_set "$key" "$value"
+  runtime_setting_assign "$name" "$value"
+}
+
+runtime_config_reset() {
+  local name="$1" key
+  key="$(runtime_setting_key "$name")" || return 1
+  db_init
+  db_exec "DELETE FROM settings WHERE key=$(sql_quote "$key");"
 }
 
 settings_get() {
@@ -423,8 +580,8 @@ record_event() {
   local status="$4"
   local message="$5"
   db_init
-  db_exec "INSERT INTO events(email,action,kind,status,message,created_at)
-           VALUES($(sql_quote "$email"),$(sql_quote "$action"),$(sql_quote "$kind"),$(sql_quote "$status"),$(sql_quote "$message"),datetime('now','localtime'));"
+  db_exec "INSERT INTO events(email,action,kind,status,message,created_at,request_id)
+           VALUES($(sql_quote "$email"),$(sql_quote "$action"),$(sql_quote "$kind"),$(sql_quote "$status"),$(sql_quote "$message"),datetime('now','localtime'),$(sql_quote "$REQUEST_ID"));"
   log "$email | $action | $status | $message"
 }
 

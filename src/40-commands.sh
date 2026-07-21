@@ -1,3 +1,4 @@
+load_persisted_runtime_config
 validate_runtime_config
 
 case "${1:-}" in
@@ -473,15 +474,54 @@ case "${1:-}" in
       echo "ERROR Telegram is not configured or delivery failed." >&2
       exit 1
     fi
+    if [ "${2:-}" = "configure" ]; then
+      [ "${3:-}" = "--token-stdin" ] && [ -n "${4:-}" ] || {
+        echo "Usage: woffy telegram configure --token-stdin <chat-id> [thread-id] [all|errors|success]"
+        exit 1
+      }
+      IFS= read -r TG_INPUT_TOKEN
+      [ -n "$TG_INPUT_TOKEN" ] || {
+        echo "ERROR Empty Telegram token" >&2
+        exit 1
+      }
+      [[ "$4" =~ ^-?[0-9]+$ ]] || {
+        echo "ERROR Telegram chat id must be numeric" >&2
+        exit 1
+      }
+      if [ -n "${5:-}" ] && ! [[ "$5" =~ ^-?[0-9]+$ ]]; then
+        echo "ERROR Telegram thread id must be numeric" >&2
+        exit 1
+      fi
+      case "${6:-all}" in all | errors | success) ;; *)
+        echo "ERROR Invalid Telegram notification mode" >&2
+        exit 1
+        ;;
+      esac
+      settings_set TG_TOKEN "$TG_INPUT_TOKEN"
+      settings_set TG_CHAT_ID "$4"
+      settings_set TG_THREAD "${5:-}"
+      settings_set TG_NOTIFY "${6:-all}"
+      record_event "" "telegram" "admin" "success" "Telegram settings updated."
+      echo "OK Telegram settings saved."
+      exit 0
+    fi
+    if [ "${2:-}" = "clear" ]; then
+      db_exec "DELETE FROM settings WHERE key IN ('TG_TOKEN','TG_CHAT_ID','TG_THREAD','TG_NOTIFY');"
+      record_event "" "telegram" "admin" "warning" "Telegram settings removed."
+      echo "OK Telegram settings removed."
+      exit 0
+    fi
     if [ $# -ge 3 ]; then
       settings_set TG_TOKEN "$2"
       settings_set TG_CHAT_ID "$3"
       [ -n "${4:-}" ] && settings_set TG_THREAD "$4"
       [ -n "${5:-}" ] && settings_set TG_NOTIFY "$5"
+      record_event "" "telegram" "admin" "success" "Telegram settings updated through deprecated positional token syntax."
+      echo "WARN Positional Telegram tokens are deprecated; use configure --token-stdin." >&2
       echo "OK Telegram settings saved."
       exit 0
     fi
-    echo "Usage: woffy telegram <bot_token> <chat_id> [thread_id] [all|errors|success]"
+    echo "Usage: woffy telegram {configure --token-stdin <chat-id> [thread-id] [mode]|test|clear}"
     ;;
 
   config)
@@ -491,8 +531,57 @@ case "${1:-}" in
         db_init
         echo "OK SQLite config valid: $DB_FILE"
         ;;
+      list)
+        CONFIG_FORMAT="${3:-text}"
+        [ "$CONFIG_FORMAT" = "text" ] || [ "$CONFIG_FORMAT" = "--json" ] || {
+          echo "Usage: woffy config list [--json]"
+          exit 1
+        }
+        if [ "$CONFIG_FORMAT" = "--json" ]; then
+          printf '{'
+          CONFIG_FIRST=true
+          for CONFIG_NAME in $(runtime_config_names); do
+            $CONFIG_FIRST || printf ','
+            CONFIG_FIRST=false
+            printf '"%s":%s' "$CONFIG_NAME" "$(runtime_config_value "$CONFIG_NAME")"
+          done
+          printf '}\n'
+        else
+          for CONFIG_NAME in $(runtime_config_names); do
+            printf '%-30s %s\n' "$CONFIG_NAME" "$(runtime_config_value "$CONFIG_NAME")"
+          done
+        fi
+        ;;
+      get)
+        if [ -z "${3:-}" ] || ! runtime_setting_key "$3" >/dev/null; then
+          echo "Usage: woffy config get <name>"
+          exit 1
+        fi
+        runtime_config_value "$3"
+        ;;
+      set)
+        [ -n "${3:-}" ] && [ -n "${4:-}" ] || {
+          echo "Usage: woffy config set <name> <value>"
+          exit 1
+        }
+        runtime_config_set "$3" "$4"
+        record_event "" "config" "admin" "success" "Runtime setting changed: $3."
+        echo "OK Runtime setting $3 saved."
+        ;;
+      reset)
+        [ -n "${3:-}" ] || {
+          echo "Usage: woffy config reset <name>"
+          exit 1
+        }
+        runtime_config_reset "$3" || {
+          echo "ERROR Unknown runtime setting: $3" >&2
+          exit 1
+        }
+        record_event "" "config" "admin" "warning" "Runtime setting reset: $3."
+        echo "OK Runtime setting $3 reset."
+        ;;
       *)
-        echo "Usage: woffy config check"
+        echo "Usage: woffy config {check|list|get|set|reset}"
         exit 1
         ;;
     esac
@@ -573,6 +662,77 @@ case "${1:-}" in
     perform_update "$UPDATE_CHANNEL" "$UPDATE_CHECK" "$ALLOW_DOWNGRADE"
     ;;
 
+  web)
+    case "${2:-}" in
+      install)
+        WEB_PORT="$WEB_PORT_DEFAULT"
+        WEB_PASSWORD_STDIN=false
+        shift 2 || true
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --port)
+              WEB_PORT="${2:-}"
+              shift 2
+              ;;
+            --password-stdin)
+              WEB_PASSWORD_STDIN=true
+              shift
+              ;;
+            *)
+              echo "Usage: woffy web install [--port N] [--password-stdin]"
+              exit 1
+              ;;
+          esac
+        done
+        web_install_release stable "$WEB_PORT" "$WEB_PASSWORD_STDIN"
+        ;;
+      update)
+        if [ "${3:-}" = "--deferred" ]; then
+          WEB_CHANNEL="${4:-stable}"
+          [ "$WEB_CHANNEL" = "stable" ] || [ "$WEB_CHANNEL" = "nightly" ] || {
+            echo "Usage: woffy web update --deferred [stable|nightly]"
+            exit 1
+          }
+          web_deferred_update "$WEB_CHANNEL"
+          exit $?
+        fi
+        WEB_CHANNEL="${3:-stable}"
+        [ "$WEB_CHANNEL" = "stable" ] || [ "$WEB_CHANNEL" = "nightly" ] || {
+          echo "Usage: woffy web update [stable|nightly]"
+          exit 1
+        }
+        web_install_release "$WEB_CHANNEL" "$WEB_PORT_DEFAULT"
+        ;;
+      start | stop | restart | status)
+        web_service_action "$2"
+        ;;
+      logs)
+        command -v journalctl >/dev/null 2>&1 || {
+          echo "ERROR journalctl is unavailable" >&2
+          exit 1
+        }
+        journalctl --user -u woffy-web.service -n "${3:-100}" --no-pager
+        ;;
+      passwd)
+        if [ "${3:-}" = "--password-stdin" ]; then
+          web_manage passwd --password-stdin
+        else
+          web_manage passwd
+        fi
+        ;;
+      serve)
+        web_serve "${3:-$WEB_PORT_DEFAULT}"
+        ;;
+      uninstall)
+        web_uninstall_panel
+        ;;
+      *)
+        echo "Usage: woffy web {install [--port N] [--password-stdin]|update [stable|nightly]|start|stop|restart|status|logs [N]|passwd [--password-stdin]|serve [port]|uninstall}"
+        exit 1
+        ;;
+    esac
+    ;;
+
   uninstall)
     check_deps crontab
     echo "This removes the installed binary, cron entries and $WOFFY_HOME."
@@ -583,6 +743,7 @@ case "${1:-}" in
       ;;
     esac
     clear_woffy_cron
+    web_cleanup_all || true
     BIN_PATH="$(get_bin_path)"
     [ -n "$BIN_PATH" ] && rm -f "$BIN_PATH"
     for target in "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm" "$LOG_FILE" "$LOG_FILE".[0-9]*; do
@@ -590,6 +751,9 @@ case "${1:-}" in
     done
     release_lock
     rmdir "$WOFFY_HOME" 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl --user stop woffy-web.service 2>/dev/null || true
+    fi
     echo "OK Woffy uninstalled."
     ;;
 

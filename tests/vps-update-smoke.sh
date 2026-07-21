@@ -13,11 +13,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-sed 's/^VERSION="3.0.0"/VERSION="2.0.0"/' "$repo_dir/woffy.sh" >"$smoke_bin/woffy"
+sed 's/^VERSION="3.1.0"/VERSION="2.0.0"/' "$repo_dir/woffy.sh" >"$smoke_bin/woffy"
 chmod +x "$smoke_bin/woffy"
 cp "$repo_dir/woffy.sh" "$assets/woffy"
 chmod +x "$assets/woffy"
-printf '3.0.0\n' >"$assets/woffy.version"
+printf '3.1.0\n' >"$assets/woffy.version"
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$assets" && sha256sum woffy >woffy.sha256)
 else
@@ -31,10 +31,10 @@ export WOFFY_UPDATE_BASE_URL="file://$smoke_dir/releases"
 woffy config check >/dev/null
 [ "$(woffy version)" = "woffy v2.0.0" ]
 woffy update >/dev/null
-[ "$(woffy version)" = "woffy v3.0.0" ]
+[ "$(woffy version)" = "woffy v3.1.0" ]
 [ -f "$smoke_bin/woffy.previous" ]
-[ "$(sqlite3 "$HOME/.woffy/woffy.db" 'PRAGMA user_version;')" = "3" ]
-woffy doctor --json | jq -e '.version=="3.0.0" and .schema_version==3 and .journal_mode=="wal"' >/dev/null
+[ "$(sqlite3 "$HOME/.woffy/woffy.db" 'PRAGMA user_version;')" = "4" ]
+woffy doctor --json | jq -e '.version=="3.1.0" and .schema_version==4 and .journal_mode=="wal"' >/dev/null
 
 mv "$smoke_bin/woffy.previous" "$smoke_bin/woffy"
 [ "$(woffy version)" = "woffy v2.0.0" ]

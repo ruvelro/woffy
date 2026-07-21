@@ -1,5 +1,13 @@
 # Change Log
 
+## 2026-07-21 — v3.1.0 development
+- Added schema v4 event request correlation and persistent validated runtime settings with environment precedence.
+- Added secure Telegram token stdin configuration and deprecated positional token use.
+- Added optional loopback-only FastAPI/Jinja/HTMX administration for users, schedules, attendance, events, reports, logs, integrations, configuration and maintenance.
+- Added Argon2id authentication, expiring sessions, CSRF, login throttling, critical reauthentication, separate web audit/jobs and read-only main DB access.
+- Added offline checksummed Linux x86_64 web artifacts, systemd user service, deferred self-update, health rollback and SSH-tunnel operation.
+- Added pytest security/integration coverage, Chromium E2E and VPS-style web install/checksum rollback simulation.
+
 ## 2026-07-21 — v3.0.0 development
 - Rollback base: `b4a12a3f1c640bcff90aefde399534b48e12f59f` (`main` before v3).
 - Snapshot commit: `faeb74bf4c856a1f7aa2cc1105299a135a9443ab` on `codex/v3-massive-update`.

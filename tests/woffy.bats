@@ -315,7 +315,7 @@ teardown() {
   state="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT state FROM run_guard;")"
   version="$(sqlite3 "$HOME/.woffy/woffy.db" "PRAGMA user_version;")"
   [ "$state" = "success" ]
-  [ "$version" = "3" ]
+  [ "$version" = "4" ]
 }
 
 @test "clock in fails closed when workday cannot be verified" {
@@ -361,14 +361,14 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  sed 's/^VERSION="3.0.0"/VERSION="3.0.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.0"/VERSION="3.1.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -eq 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.0.1" ]
+  [ "$output" = "woffy v3.1.1" ]
   [ -f "$BIN_DIR/woffy.previous" ]
 }
 
@@ -376,21 +376,21 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  sed 's/^VERSION="3.0.0"/VERSION="3.0.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.0"/VERSION="3.1.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.0.0" ]
+  [ "$output" = "woffy v3.1.0" ]
 
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   export WOFFY_TEST_UPDATE_POSTCHECK_FAIL=true
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.0.0" ]
+  [ "$output" = "woffy v3.1.0" ]
 }
 
 @test "run due processes different workers in one orchestrator run" {
@@ -477,28 +477,28 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   run bash "$TEST_DIR/woffy.sh" update --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Available (stable): v3.0.1"* ]]
+  [[ "$output" == *"Available (stable): v3.1.1"* ]]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.0.0" ]
+  [ "$output" = "woffy v3.1.0" ]
 }
 
 @test "update rejects invalid syntax and version mismatch" {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf '#!/bin/bash\nif then\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.0.0" ]
+  [ "$output" = "woffy v3.1.0" ]
 
-  sed 's/^VERSION="3.0.0"/VERSION="3.0.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.0"/VERSION="3.1.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
@@ -523,7 +523,7 @@ teardown() {
   run bash "$TEST_DIR/woffy.sh" update --check
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.0.0" ]
+  [ "$output" = "woffy v3.1.0" ]
 }
 
 @test "installer verifies release assets and installs the cron orchestrator" {
@@ -532,12 +532,12 @@ teardown() {
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
   cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.0.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
   [ "$status" -eq 0 ]
   run "$HOME/.local/bin/woffy" version
-  [ "$output" = "woffy v3.0.0" ]
+  [ "$output" = "woffy v3.1.0" ]
   grep -q '# woffy-run-due' "$CRON_FILE"
 }
 
@@ -546,7 +546,7 @@ teardown() {
   export WOFFY_INSTALL_BASE_URL="https://updates.example.test/stable"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
   cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.0.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
   [ "$status" -ne 0 ]
@@ -564,4 +564,62 @@ teardown() {
   [[ "$output" == *"LAST_RUN"* ]]
   [[ "$output" == *"LAST_ERROR"* ]]
   [[ "$output" == *"2026-01-02 18:00:00"* ]]
+}
+
+@test "runtime settings persist while environment variables keep precedence" {
+  run bash "$TEST_DIR/woffy.sh" config set max_parallel 7
+  [ "$status" -eq 0 ]
+  run bash "$TEST_DIR/woffy.sh" config get max_parallel
+  [ "$status" -eq 0 ]
+  [ "$output" = "7" ]
+  run env WOFFY_MAX_PARALLEL=2 bash "$TEST_DIR/woffy.sh" config get max_parallel
+  [ "$status" -eq 0 ]
+  [ "$output" = "2" ]
+  run bash "$TEST_DIR/woffy.sh" config list --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.max_parallel == 7 and .claim_lease_seconds == 120' >/dev/null
+  run bash "$TEST_DIR/woffy.sh" config reset max_parallel
+  [ "$status" -eq 0 ]
+  run bash "$TEST_DIR/woffy.sh" config get max_parallel
+  [ "$output" = "4" ]
+}
+
+@test "telegram stdin keeps the token out of arguments and web request id reaches events" {
+  run bash -c "printf '%s\n' 'BOT-SECRET' | '$TEST_DIR/woffy.sh' telegram configure --token-stdin 'not-a-chat'"
+  [ "$status" -ne 0 ]
+  run env WOFFY_REQUEST_ID=web-request-1 bash -c "printf '%s\n' 'BOT-SECRET' | '$TEST_DIR/woffy.sh' telegram configure --token-stdin 123 '' errors"
+  [ "$status" -eq 0 ]
+  token="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT value FROM settings WHERE key='TG_TOKEN';")"
+  request_id="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT request_id FROM events WHERE action='telegram' ORDER BY id DESC LIMIT 1;")"
+  [ "$token" = "BOT-SECRET" ]
+  [ "$request_id" = "web-request-1" ]
+  [[ "$output" != *"BOT-SECRET"* ]]
+  run bash "$TEST_DIR/woffy.sh" telegram clear
+  [ "$status" -eq 0 ]
+  configured="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT COUNT(*) FROM settings WHERE key='TG_TOKEN';")"
+  [ "$configured" = "0" ]
+}
+
+@test "schema v4 adds event correlation without rewriting historical events" {
+  run bash "$TEST_DIR/woffy.sh" config check
+  [ "$status" -eq 0 ]
+  version="$(sqlite3 "$HOME/.woffy/woffy.db" "PRAGMA user_version;")"
+  column="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT COUNT(*) FROM pragma_table_info('events') WHERE name='request_id';")"
+  [ "$version" = "4" ]
+  [ "$column" = "1" ]
+}
+
+@test "deferred web update selects stable and nightly without restarting its own service" {
+  cat > "$BIN_DIR/systemd-run" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TEST_DIR/systemd-run.calls"
+EOF
+  chmod +x "$BIN_DIR/systemd-run"
+  run bash "$TEST_DIR/woffy.sh" web update --deferred nightly
+  [ "$status" -eq 0 ]
+  run bash "$TEST_DIR/woffy.sh" web update --deferred stable
+  [ "$status" -eq 0 ]
+  calls="$(cat "$TEST_DIR/systemd-run.calls")"
+  [[ "$calls" == *"web update nightly"* ]]
+  [[ "$calls" == *"web update stable"* ]]
 }

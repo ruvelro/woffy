@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Acceso{% endblock %}
+{% block content %}
+<section class="login-card">
+  <p class="eyebrow">Administración local</p><h1>Entra en Woffy</h1>
+  {% if configured %}
+  <form method="post" action="/login"><label>Clave administrativa<input type="password" name="password" required autofocus autocomplete="current-password"></label><button>Entrar</button></form>
+  {% else %}
+  <div class="notice error">El panel aún no tiene clave. Ejecuta <code>woffy web passwd</code> en el VPS.</div>
+  {% endif %}
+</section>
+{% endblock %}
+

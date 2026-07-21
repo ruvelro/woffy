@@ -15,6 +15,7 @@ for module in \
   "$repo_dir/src/10-woffu.sh" \
   "$repo_dir/src/20-scheduler.sh" \
   "$repo_dir/src/30-operations.sh" \
+  "$repo_dir/src/35-web.sh" \
   "$repo_dir/src/40-commands.sh"; do
   cat "$module" >>"$tmp"
 done
