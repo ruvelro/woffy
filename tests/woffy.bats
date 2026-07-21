@@ -361,14 +361,14 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  sed 's/^VERSION="3.1.0"/VERSION="3.1.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.1"/VERSION="3.1.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -eq 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.1" ]
+  [ "$output" = "woffy v3.1.2" ]
   [ -f "$BIN_DIR/woffy.previous" ]
 }
 
@@ -376,21 +376,21 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  sed 's/^VERSION="3.1.0"/VERSION="3.1.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.1"/VERSION="3.1.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.0" ]
+  [ "$output" = "woffy v3.1.1" ]
 
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   export WOFFY_TEST_UPDATE_POSTCHECK_FAIL=true
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.0" ]
+  [ "$output" = "woffy v3.1.1" ]
 }
 
 @test "run due processes different workers in one orchestrator run" {
@@ -477,28 +477,28 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   run bash "$TEST_DIR/woffy.sh" update --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Available (stable): v3.1.1"* ]]
+  [[ "$output" == *"Available (stable): v3.1.2"* ]]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.0" ]
+  [ "$output" = "woffy v3.1.1" ]
 }
 
 @test "update rejects invalid syntax and version mismatch" {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf '#!/bin/bash\nif then\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.0" ]
+  [ "$output" = "woffy v3.1.1" ]
 
-  sed 's/^VERSION="3.1.0"/VERSION="3.1.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.1"/VERSION="3.1.3"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
@@ -523,7 +523,7 @@ teardown() {
   run bash "$TEST_DIR/woffy.sh" update --check
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.0" ]
+  [ "$output" = "woffy v3.1.1" ]
 }
 
 @test "installer verifies release assets and installs the cron orchestrator" {
@@ -532,12 +532,12 @@ teardown() {
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
   cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
   [ "$status" -eq 0 ]
   run "$HOME/.local/bin/woffy" version
-  [ "$output" = "woffy v3.1.0" ]
+  [ "$output" = "woffy v3.1.1" ]
   grep -q '# woffy-run-due' "$CRON_FILE"
 }
 
@@ -546,7 +546,7 @@ teardown() {
   export WOFFY_INSTALL_BASE_URL="https://updates.example.test/stable"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
   cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
   [ "$status" -ne 0 ]

@@ -1,4 +1,4 @@
-# woffy v3.1.0
+# woffy v3.1.1
 
 CLI multiusuario para automatizar fichajes de Woffu desde un VPS administrado de forma centralizada.
 

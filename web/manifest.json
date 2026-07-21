@@ -1,6 +1,6 @@
 {
-  "version": "3.1.0",
-  "minimum_cli_version": "3.1.0",
+  "version": "3.1.1",
+  "minimum_cli_version": "3.1.1",
   "maximum_schema_version": 4,
   "bind_policy": "loopback-only",
   "platform": "linux-x86_64",

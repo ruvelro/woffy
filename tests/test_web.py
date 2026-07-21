@@ -47,8 +47,8 @@ def web_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 import json, os, pathlib, sys
 args=sys.argv[1:]
 with open(os.environ['WOFFY_TEST_CALLS'],'a',encoding='utf-8') as f: f.write(json.dumps(args)+'\\n')
-if args==['version']: print('woffy v3.1.0')
-elif args[:2]==['doctor','--json']: print('{"version":"3.1.0","schema_version":4,"cron_run_due":true,"telegram":false,"woffu_api":false}')
+if args==['version']: print('woffy v3.1.1')
+elif args[:2]==['doctor','--json']: print('{"version":"3.1.1","schema_version":4,"cron_run_due":true,"telegram":false,"woffu_api":false}')
 elif args[:3]==['config','list','--json']: print('{"max_parallel":4,"claim_lease_seconds":120}')
 elif args and args[0]=='backup': pathlib.Path(args[1]).write_bytes(b'backup'); print('OK Backup created')
 else: print('OK '+ ' '.join(args))

@@ -30,8 +30,8 @@ def test_browser_login_navigation_and_safe_user_action(tmp_path: Path):
         """#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ['WOFFY_TEST_CALLS'],'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')
-if sys.argv[1:]==['version']: print('woffy v3.1.0')
-elif sys.argv[1:3]==['doctor','--json']: print('{"version":"3.1.0","schema_version":4,"cron_run_due":true}')
+if sys.argv[1:]==['version']: print('woffy v3.1.1')
+elif sys.argv[1:3]==['doctor','--json']: print('{"version":"3.1.1","schema_version":4,"cron_run_due":true}')
 else: print('OK')
 """,
         encoding="utf-8",

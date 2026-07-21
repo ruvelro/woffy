@@ -216,7 +216,8 @@ semver_number() {
 perform_update() {
   local channel="$1" check_only="$2" allow_downgrade="$3"
   local asset_base version_url target_version current_number target_number
-  local tmp checksum_tmp expected actual bin_path previous installed_version
+  local tmp checksum_tmp expected actual bin_path bin_dir previous installed_version
+  local pre_update_backup doctor_output doctor_status
 
   if [ -n "${WOFFY_UPDATE_BASE_URL:-}" ]; then
     asset_base="${WOFFY_UPDATE_BASE_URL%/}/$channel"
@@ -248,7 +249,19 @@ perform_update() {
     return 1
   fi
 
-  tmp="$(mktemp)"
+  bin_path="$(get_bin_path)"
+  [ -n "$bin_path" ] || {
+    echo "ERROR Current woffy binary not found" >&2
+    return 1
+  }
+  bin_dir="$(dirname "$bin_path")"
+
+  # 1. Download the new binary to a temp file on the same filesystem as the
+  #    installed binary, so the later replace step can be a true atomic mv.
+  tmp="$(mktemp "$bin_dir/.woffy.update.XXXXXX")" || {
+    echo "ERROR Could not create temp file for update" >&2
+    return 1
+  }
   checksum_tmp="$(mktemp)"
   curl -fsSL --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time 30 "$asset_base/woffy" -o "$tmp" || {
     rm -f "$tmp" "$checksum_tmp"
@@ -260,46 +273,78 @@ perform_update() {
     echo "ERROR Could not download update checksum" >&2
     return 1
   }
+
+  # 2. Verify the SHA-256 checksum.
   expected="$(awk 'NR==1{print $1}' "$checksum_tmp")"
   actual="$(sha256_file "$tmp")"
+  rm -f "$checksum_tmp"
   if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
-    rm -f "$tmp" "$checksum_tmp"
+    rm -f "$tmp"
     echo "ERROR Update checksum mismatch" >&2
     return 1
   fi
+
+  # 3. Syntax check.
   bash -n "$tmp" || {
-    rm -f "$tmp" "$checksum_tmp"
+    rm -f "$tmp"
     echo "ERROR Downloaded update failed syntax check" >&2
     return 1
   }
+
+  # 4. Reject CRLF line endings (corrupted transfer or wrong platform asset).
+  if LC_ALL=C grep -q $'\r' "$tmp"; then
+    rm -f "$tmp"
+    echo "ERROR Downloaded update contains CRLF line endings" >&2
+    return 1
+  fi
+
   chmod +x "$tmp"
+
+  # 5. Confirm the downloaded binary reports the expected version.
   installed_version="$("$tmp" version 2>/dev/null | awk '/^woffy v/{sub(/^woffy v/,""); print; exit}')"
   if [ "$installed_version" != "$target_version" ]; then
-    rm -f "$tmp" "$checksum_tmp"
+    rm -f "$tmp"
     echo "ERROR Update binary version does not match metadata" >&2
     return 1
   fi
 
-  bin_path="$(get_bin_path)"
-  [ -n "$bin_path" ] || {
-    rm -f "$tmp" "$checksum_tmp"
-    echo "ERROR Current woffy binary not found" >&2
+  # 6. Preserve the current binary for rollback.
+  previous="$bin_path.previous"
+  cp -p "$bin_path" "$previous" || {
+    rm -f "$tmp"
+    echo "ERROR Could not preserve current binary" >&2
     return 1
   }
-  previous="$bin_path.previous"
-  cp -p "$bin_path" "$previous"
+
+  # 7. Safety backup of settings/DB before touching the installed binary.
+  pre_update_backup="$(backup_files "$WOFFY_HOME/pre-update-$(date +%Y%m%d-%H%M%S).tar.gz" 2>/dev/null || true)"
+  if [ -n "$pre_update_backup" ] && [ -f "$pre_update_backup" ]; then
+    echo "OK Pre-update backup: $pre_update_backup"
+  else
+    echo "WARN Could not create pre-update backup; continuing" >&2
+  fi
+
+  # 8. Atomic replace: tmp and bin_path share a filesystem (step 1), so mv
+  #    either fully succeeds or leaves the original binary untouched.
   if ! mv "$tmp" "$bin_path"; then
-    rm -f "$tmp" "$checksum_tmp"
+    rm -f "$tmp"
+    echo "ERROR Could not install update" >&2
     return 1
   fi
-  rm -f "$checksum_tmp"
+
+  # 9. Post-install health check; roll back automatically on any failure.
+  doctor_output="$("$bin_path" doctor 2>&1)"
+  doctor_status=$?
   installed_version="$("$bin_path" version 2>/dev/null || true)"
-  if [ "$installed_version" != "woffy v$target_version" ] || [ "${WOFFY_TEST_UPDATE_POSTCHECK_FAIL:-false}" = "true" ]; then
+  if [ "$doctor_status" -ne 0 ] || [ "$installed_version" != "woffy v$target_version" ] ||
+    [ "${WOFFY_TEST_UPDATE_POSTCHECK_FAIL:-false}" = "true" ]; then
     mv "$previous" "$bin_path"
-    echo "ERROR Updated binary failed post-check; previous binary restored" >&2
+    echo "ERROR Updated binary failed post-update doctor check; previous binary restored" >&2
+    echo "$doctor_output" >&2
     return 1
   fi
   echo "OK Woffy updated to v$target_version from '$channel'."
+  echo "Rollback: $previous"
 }
 
 show_help() {

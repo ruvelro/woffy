@@ -3,7 +3,7 @@
 ## Executive Summary
 - `Confirmed`: `woffy` is now a centrally managed multi-user Bash CLI for Woffu attendance automation on a VPS.
 - `Confirmed`: the CLI remains a single executable script, with an optional Python web companion.
-- `Confirmed`: the current development version is `3.1.0`.
+- `Confirmed`: the current development version is `3.1.1`.
 - `Confirmed`: SQLite is the source of truth for users, credentials, tokens, schedules, user cards, run guards, and events.
 
 ## Current System Shape

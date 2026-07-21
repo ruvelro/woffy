@@ -1,5 +1,9 @@
 # Change Log
 
+## 2026-07-21 — v3.1.1
+- Fixed a broken release pipeline: a pre-existing empty GitHub Release blocked asset publication for `v3.1.0`, and a follow-up tag was pushed without bumping `VERSION`, leaving no installable release. Republished under `v3.1.1` with `VERSION` synced across `src/00-core.sh`, `web/manifest.json` and `web/woffy_web/__init__.py`.
+- Hardened `woffy update`: the downloaded binary is now staged on the same filesystem as the installed one (true atomic `mv`), rejected if it contains CRLF line endings, and preceded by a safety backup of settings/DB via `backup_files` before the binary is replaced. The post-update health check now runs `woffy doctor` (not just a version string match) and auto-restores `woffy.previous` on any failure.
+
 ## 2026-07-21 — v3.1.0 development
 - Added schema v4 event request correlation and persistent validated runtime settings with environment precedence.
 - Added secure Telegram token stdin configuration and deprecated positional token use.
