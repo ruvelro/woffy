@@ -1,0 +1,4 @@
+{% extends "base.html" %}{% block title %}Ajustes{% endblock %}{% block content %}
+<div class="page-head"><div><p class="eyebrow">Motor</p><h1>Configuración operativa</h1><p>Los cambios afectan a futuras ejecuciones; una variable de entorno siempre tiene prioridad.</p></div></div><section class="panel"><div class="settings-list">{% for name,value in runtime.items() %}<form method="post" class="setting-row"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}"><div><strong>{{ name }}</strong><small>Valor efectivo</small></div><input name="value" value="{{ value }}" inputmode="numeric"><button name="operation" value="set">Guardar</button><button name="operation" value="reset" class="secondary">Predeterminado</button></form>{% else %}<p class="empty">No se pudo leer la configuración.</p>{% endfor %}</div></section>
+{% endblock %}
+

@@ -1,77 +1,44 @@
-# CHECKLIST de Release (pre-main)
+# Release checklist — Woffy v3.1
 
-Use this list before merging to `main`.
+## Integridad
 
-## 1) Integrity and format
-- [ ] `bash -n woffy.sh` without errors.
-- [ ] `bash -n install-woffy.sh` without errors.
-- [ ] `chmod +x woffy.sh install-woffy.sh`.
+- [ ] `bash scripts/build-woffy.sh --check`
+- [ ] `bash -n woffy.sh install-woffy.sh`
+- [ ] `shellcheck woffy.sh install-woffy.sh`
+- [ ] `shfmt -d -i 2 -ci woffy.sh install-woffy.sh`
+- [ ] `bats tests`
+- [ ] `bash tests/vps-update-smoke.sh`
+- [ ] `PYTHONPATH=web pytest -q tests/test_web.py tests/test_web_e2e.py`
+- [ ] `ruff check web/woffy_web tests/test_web*.py && ruff format --check web/woffy_web tests/test_web*.py`
+- [ ] `bash scripts/build-web-artifact.sh dist && bash tests/web-install-smoke.sh` en Linux x86_64 con Python 3.11.
+- [ ] `git diff --check` y revisión sin secretos.
 
-## 2) Install
-- [ ] Standard install works:
-  - `curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash`
-- [ ] Binary installed at `~/.local/bin/woffy`.
+## Migración y operación
 
-## 3) Config/login
-- [ ] `woffy login` works with valid credentials.
-- [ ] Files are created/updated:
-  - `~/.woffy.conf` (600)
-  - `~/.woffy.token` (600)
-  - `~/.woffy.user` (600)
-- [ ] `woffy user` shows coherent data.
+- [ ] Migrar una copia de DB v2/v3 y confirmar `user_version=4`, WAL e `integrity_check=ok`.
+- [ ] Verificar login seguro, horarios atómicos, `run due --dry-run`, catch-up, reintentos y serialización por trabajador.
+- [ ] Verificar que un fallo de `workdaylite` no ficha.
+- [ ] Probar JSON/CSV con caracteres especiales y Telegram configurado/no configurado.
+- [ ] Probar backup/restore y rollback del binario.
+- [ ] Confirmar configuración persistente, precedencia de variables de entorno y `request_id` en eventos.
 
-## 4) Sign and status
-- [ ] `woffy status` responds.
-- [ ] `woffy in` works when expected.
-- [ ] `woffy out` works when expected.
-- [ ] Double sign attempts are blocked.
+## API oficial
 
-## 5) Dry-run
-- [ ] `woffy dry-run in` simulates without real sign.
-- [ ] `woffy dry-run out` simulates without real sign.
+- [ ] Validar OAuth `client_credentials` con CompanyId/API key de pruebas.
+- [ ] Contrastar `/api/v1/signs`, payload y respuesta con Swagger vigente.
+- [ ] Ejecutar un retroactivo de pruebas y verificarlo en Woffu.
 
-## 6) Report
-- [ ] `woffy report` (text) is correct.
-- [ ] `woffy report --format json` is valid.
-- [ ] `woffy report --format csv` is valid.
-- [ ] `woffy report --from YYYY-MM-DD --to YYYY-MM-DD` filters correctly.
-- [ ] `woffy report --strict --from ... --to ...` fails on invalid range.
-- [ ] `woffy report telegram` sends when Telegram is configured.
+## Release y VPS
 
-## 7) Telegram
-- [ ] `woffy telegram` saves config.
-- [ ] `woffy telegram test` reaches chat.
-- [ ] `woffy notify test success|warning|error|info|all` works.
-- [ ] `--no-telegram` blocks sends when used.
+- [ ] El tag coincide con `VERSION`.
+- [ ] El release contiene los tres assets CLI y `woffy-web.tar.gz`, `woffy-web.version`, `woffy-web.sha256`.
+- [ ] Instalar desde release en un HOME limpio.
+- [ ] Actualizar una instalación v2 con `woffy update` y confirmar DB/cron.
+- [ ] Forzar checksum y post-check fallidos y confirmar restauración de `.previous`.
+- [ ] Ejecutar canario y observar al menos dos ventanas de horarios antes de ampliar usuarios.
+- [ ] Instalar Woffy Web por túnel SSH, verificar bind loopback, sesión, CSRF, backup, restore y actualización diferida.
 
-## 8) Cron / schedule
-- [ ] `woffy schedule list` shows tasks.
-- [ ] `woffy schedule entrada` / `salida` create tasks.
-- [ ] `woffy schedule pause` pauses woffy tasks.
-- [ ] `woffy schedule resume` resumes woffy tasks.
-- [ ] `woffy schedule report` sets Friday 18:00.
-- [ ] `woffy schedule timezone Europe/Madrid` sets CRON_TZ.
-- [ ] `woffy schedule clear` removes woffy tasks.
+## Documentación
 
-## 9) Systemd user timers
-- [ ] `woffy schedule systemd enable` creates/enables timers.
-- [ ] `woffy schedule systemd status` shows status.
-- [ ] `woffy schedule systemd disable` removes timers.
-
-## 10) Maintenance
-- [ ] `woffy doctor` is correct.
-- [ ] `woffy doctor --json` returns valid JSON.
-- [ ] `woffy self-test` passes (or expected failures documented).
-- [ ] `woffy backup` creates `.tar.gz`.
-- [ ] `woffy restore <backup>` restores correctly.
-- [ ] `woffy changelog` shows local/remote version and commits.
-- [ ] `woffy update` updates from main.
-- [ ] `woffy update nightly` updates from nightly.
-
-## 11) Uninstall
-- [ ] `woffy uninstall` removes binary, config, token, user, log, lock and cron.
-
-## 12) Final control
-- [ ] `git diff` reviewed with no secrets.
-- [ ] `README.md` matches real commands.
-- [ ] `CHECKLIST.md` updated.
+- [ ] README, `/docs`, tareas, ADR y changelog coinciden con el comportamiento publicado.
+- [ ] El release conserva el punto de retorno `b4a12a3` y snapshot `faeb74b`.

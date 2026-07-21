@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Woffy{% endblock %} · Woffy Web</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">Woffy <span>v{{ version }}</span></a>
+    {% if csrf %}
+    <nav aria-label="Principal">
+      <a href="/users">Usuarios</a><a href="/schedules">Horarios</a><a href="/attendance">Fichajes</a>
+      <a href="/events">Eventos</a><a href="/reports">Informes</a><a href="/logs">Logs</a><a href="/integrations">Integraciones</a>
+      <a href="/settings">Ajustes</a><a href="/maintenance">Mantenimiento</a>
+    </nav>
+    <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ghost">Salir</button></form>
+    {% endif %}
+  </header>
+  <main>
+    {% if message %}<div class="notice success" role="status">{{ message }}</div>{% endif %}
+    {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Panel local · acceso previsto mediante túnel SSH</footer>
+</body>
+</html>

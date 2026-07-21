@@ -2,6 +2,7 @@
 
 ## Event Registry
 - `Confirmed`: every login, administrative change, sign success, dry-run, warning, and error is stored in SQLite `events`.
+- `Confirmed`: web-originated events include a request ID that correlates them with the independent web audit.
 - `Confirmed`: `woffy events all` lists recent events for all workers.
 - `Confirmed`: `woffy events <email>` lists recent events for one worker.
 - `Confirmed`: `woffy events <email> --days 30` and `--days 60` support operational investigation windows.
@@ -19,3 +20,7 @@
 ## Backup And Restore
 - `Confirmed`: backups archive the whole `~/.woffy` directory.
 - `Confirmed`: restore extracts the archive and reapplies expected permissions.
+- `Confirmed`: v3 backup uses SQLite `.backup`; restore validates archive paths and database integrity before replacement.
+- `Confirmed`: events are retained by default and only `events purge --before ... --yes` deletes them.
+- `Confirmed`: self-update validates release version, checksum and syntax, keeps `.previous`, and rolls back on failed post-check.
+- `Confirmed`: the optional panel performs pre-maintenance backups, restore post-check/rollback and detached self-update so service restart cannot kill its updater.

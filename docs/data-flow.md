@@ -11,7 +11,7 @@
 
 ## Sign Flow
 1. Admin or scheduler runs `woffy in <email>`, `woffy out <email>`, or dry-run.
-2. The global lock is acquired.
+2. Manual commands acquire the global lock; scheduled workers are serialized per email by the orchestrator.
 3. A valid worker token is loaded or refreshed.
 4. `/api/signs` determines the current state.
 5. Duplicate or unsafe actions are skipped.
@@ -20,10 +20,11 @@
 
 ## Run Due Flow
 1. Cron calls `woffy run due --quiet` once per minute.
-2. The command selects active schedules matching current weekday and `HH:MM`.
-3. `run_guard` is inserted before execution.
-4. If the guard already exists, that user/action/minute is skipped.
-5. Due sign flows run per selected worker.
+2. The command selects active schedules across the catch-up window.
+3. Due slots are grouped by worker and claimed with a lease.
+4. Workers run in bounded parallelism while each worker's slots remain serial.
+5. Retryable failures set `next_retry_at`; completed and benign slots remain terminal.
+6. Stale claims can be recovered after the lease expires.
 
 ## User Administration Flow
 1. `woffy users disable <email>` sets `users.active=0` and records a warning event.
@@ -50,5 +51,24 @@
 4. Optional Telegram delivery sends the global admin report.
 
 ## Backup And Restore Flow
-1. `backup` archives the whole `~/.woffy` directory.
-2. `restore` extracts it back and reapplies expected permissions.
+1. `backup` creates a consistent SQLite snapshot and archives it with logs and a manifest.
+2. `restore` rejects unsafe paths, validates SQLite integrity, keeps a pre-restore DB and replaces atomically.
+
+## Verified Update Flow
+1. Resolve stable or nightly GitHub Release metadata.
+2. Verify SemVer, SHA-256 and Bash syntax before replacement.
+3. Preserve the current executable as `.previous`.
+4. Replace atomically and restore `.previous` if the post-check fails.
+
+## Web Request Flow
+1. The browser reaches loopback through an SSH tunnel and authenticates against the Argon2id admin hash.
+2. The server validates the session, Host header and CSRF token; every critical action additionally rechecks the password and an exact phrase.
+3. Read pages query `woffy.db` with a read-only SQLite connection and bounded filters.
+4. Mutations are mapped to fixed CLI argument arrays; secrets are passed by stdin and a generated `WOFFY_REQUEST_ID` correlates CLI events with web audit.
+5. Exit status and redacted output are stored in the separate web audit DB, then the page re-queries current state.
+
+## Web Maintenance Flow
+1. Backup writes only into the protected web backup directory and may be downloaded by basename.
+2. Restore uploads receive generated names and size limits, create a pre-restore backup, run CLI validation and roll back if the post-check fails.
+3. Update creates a backup, updates the CLI with its existing rollback, schedules the panel update in a detached systemd unit and health-checks the new release.
+4. Uninstall creates a recovery archive outside `~/.woffy`, removes panel/CLI state and then stops the service; the browser is expected to disconnect.

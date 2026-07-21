@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Resumen{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Centro de control</p><h1>Todo Woffy, de un vistazo</h1></div><span class="status {{ 'ok' if doctor.cron_run_due else 'warn' }}">{{ 'Scheduler activo' if doctor.cron_run_due else 'Scheduler sin cron' }}</span></div>
+<section class="metrics">
+  <article><span>Usuarios activos</span><strong>{{ stats.active_users or 0 }}</strong><small>{{ stats.users or 0 }} totales</small></article>
+  <article><span>Errores 24 h</span><strong>{{ stats.recent_errors or 0 }}</strong><small>Último evento {{ stats.last_event or '—' }}</small></article>
+  <article><span>Slots con problema</span><strong>{{ stats.pending_failures or 0 }}</strong><small>retryable o failed</small></article>
+  <article><span>Integraciones</span><strong>{{ (stats.telegram or 0) + (stats.api or 0) }}/2</strong><small>Telegram · API oficial</small></article>
+</section>
+<div class="grid two">
+  <section class="panel"><div class="panel-head"><h2>Próximos horarios</h2><a href="/schedules">Editar</a></div><table><thead><tr><th>Hora</th><th>Usuario</th><th>Acción</th><th>Días</th></tr></thead><tbody>{% for row in upcoming[:12] %}<tr><td>{{ row.time_hhmm }}</td><td>{{ row.email }}</td><td><span class="pill {{ row.action }}">{{ row.action }}</span></td><td>{{ row.weekdays }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No hay horarios activos.</td></tr>{% endfor %}</tbody></table></section>
+  <section class="panel"><div class="panel-head"><h2>Errores recientes</h2><a href="/events?status=error">Ver todos</a></div><div class="timeline">{% for row in recent %}<article><span class="dot error-dot"></span><div><strong>{{ row.email or 'Sistema' }} · {{ row.action }}</strong><p>{{ row.message }}</p><small>{{ row.created_at }}</small></div></article>{% else %}<p class="empty">Sin errores recientes.</p>{% endfor %}</div></section>
+</div>
+<section class="panel"><div class="panel-head"><h2>Trabajos de mantenimiento</h2><a href="/maintenance">Detalles</a></div><table><thead><tr><th>Acción</th><th>Estado</th><th>Inicio</th></tr></thead><tbody>{% for job in jobs %}<tr><td>{{ job.action }}</td><td><span class="status {{ 'ok' if job.status == 'success' else 'warn' }}">{{ job.status }}</span></td><td>{{ job.created_at }}</td></tr>{% else %}<tr><td colspan="3" class="empty">Todavía no hay trabajos.</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}
+

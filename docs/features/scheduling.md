@@ -21,3 +21,6 @@
 
 ## Duplicate Protection
 - `Confirmed`: `run_guard` prevents the same worker/action/date/time from running twice.
+- `Confirmed`: the scheduler rechecks a five-minute window, leases slots and persists attempts/retry times.
+- `Confirmed`: up to four workers run concurrently, but each worker's due actions run serially.
+- `Confirmed`: `run due --dry-run` lists due slots without claims or Woffu writes.

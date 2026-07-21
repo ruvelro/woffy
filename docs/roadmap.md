@@ -1,21 +1,25 @@
 # Roadmap
 
-## Phase 1: Stabilize Multi-User SQLite
-- Harden DB migrations and backward-compatibility messages.
-- Add admin commands for enabling/disabling users.
-- Add schedule editing commands for per-user overrides.
-- Expand tests around Woffu API failure modes.
+## Phase 1: Release v3 Safely
+- Validate official OAuth and `/api/v1/signs` against a Woffu test tenant.
+- Publish checksummed CLI assets and exercise update on a VPS canary.
+- Observe two schedule windows before enabling all workers.
 
-## Phase 2: Improve Operator Control
-- Add CSV exports by user and date range.
-- Add last-run and last-error summaries to `woffy users`.
-- Add Telegram report templates for daily operations.
+## Phase 2: Release v3.1 Web Companion
+- Publish the checksummed Linux x86_64 web archive and install it on the canary through an SSH tunnel.
+- Exercise login, schedules, manual sign, logs, backup/restore and joint CLI/web update.
+- Observe systemd user-service health before enabling destructive GUI actions on the production VPS.
 
-## Phase 3: Reduce Structural Risk
-- Split large shell sections carefully while preserving single-file distribution.
-- Consider generating the distributable script from sourced modules.
+## Phase 3: Reduce Remaining Risk
+- Remove positional passwords in the next major version.
+- Evaluate an OS keyring or encrypted secret provider compatible with unattended cron.
+- Investigate documented Woffu idempotency/reconciliation capabilities.
+- Add per-worker time zones and holiday calendars.
+- Add bulk CSV onboarding and schedule import.
+- Evaluate ARM64 web artifacts, named administrators/RBAC and Prometheus metrics.
 
 ## Non-Goals For Now
-- No web panel in v1.
+- No public Internet exposure or reverse proxy for Woffy Web.
+- No multi-administrator access in v3.1.
 - No encrypted master passphrase because cron must run unattended.
 - No stack migration away from Bash yet.
