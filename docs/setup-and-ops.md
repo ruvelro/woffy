@@ -35,19 +35,43 @@
 - Scheduling: `woffy run due`, `woffy schedule install`, `woffy schedule list`, `woffy schedule clear`, `woffy schedule user <email> ...`.
 - Investigation: `woffy events all`, `woffy events <email> --days 30|60 --status error`.
 - Reporting: `woffy report all`.
+- Notifications: `woffy telegram configure --token-stdin ...`, `woffy telegram set-mode all|errors|success` (changes only the notification level, no token/chat id re-entry).
 - Maintenance: `woffy doctor`, `woffy self-test`, `woffy config`, `woffy backup`, `woffy restore`, `woffy changelog`, `woffy update`.
 
 ## Optional Web Panel
 
+### Install
+
 ```bash
 printf '%s\n' "$ADMIN_PASSWORD" | woffy web install --password-stdin
-systemctl --user status woffy-web.service
+woffy web status
+```
+
+`web install` downloads the checksummed offline artifact (vendored Python dependencies, no runtime CDN), creates the Argon2id admin credential, and registers a `systemd --user` service (`woffy-web.service`) bound to `127.0.0.1:8787` by default. Use `--port N` to pick a different local-only port.
+
+### Reach it through an SSH tunnel
+
+The panel binds **only to loopback**, never to a public interface. From the client machine:
+
+```bash
 ssh -L 8787:127.0.0.1:8787 user@vps
 ```
 
-Open `http://127.0.0.1:8787` locally. Do not change the bind address or expose port 8787 publicly. If the VPS does not retain user services after logout, enable user lingering according to the host policy; otherwise run `woffy web serve` in a managed foreground session.
+Keep that SSH session open and browse `http://127.0.0.1:8787` locally; traffic is encrypted end-to-end inside the tunnel. Do not change the bind address or expose port 8787 publicly — there is no TLS/public-exposure hardening on the panel itself, by design.
 
-Use `woffy web passwd` to rotate the administrator password and invalidate all sessions. `woffy web update stable|nightly` stages and health-checks a release; `current` is restored to `previous` on failure. `woffy web uninstall` removes only the panel and preserves CLI data.
+If the VPS does not retain user services after logout, enable user lingering according to host policy (`loginctl enable-linger <user>`); otherwise run `woffy web serve [port]` in a managed foreground session (`tmux`/`screen`) as the fallback.
+
+### Operate the service
+
+```bash
+woffy web start|stop|restart|status
+woffy web logs [N]
+woffy web passwd            # rotates the administrator password, invalidates all sessions
+woffy web update stable|nightly
+woffy web uninstall         # removes only the panel; CLI data is untouched
+```
+
+`woffy web update` stages and health-checks a release before switching; `current` is restored from `previous` automatically on a failed post-check, so a bad panel update never leaves the service down.
 
 The runtime configuration interface accepts only documented bounded integer keys. Persistent SQLite values are used unless the corresponding `WOFFY_*` environment variable is set.
 

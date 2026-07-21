@@ -1,7 +1,7 @@
 # Feature: Optional Web Panel
 
 ## Access And Security
-- `Confirmed`: Woffy Web listens only on loopback and is intended for an SSH tunnel.
+- `Confirmed`: Woffy Web listens only on loopback (`127.0.0.1:8787` by default, configurable with `woffy web install --port N`) and is intended to be reached through an SSH local port forward (`ssh -L 8787:127.0.0.1:8787 user@vps`), never exposed publicly.
 - `Confirmed`: one administrator authenticates with an Argon2id hash; sessions expire and password rotation invalidates all sessions.
 - `Confirmed`: Host validation, CSP, CSRF and login throttling are enabled; every critical action requires exact confirmation and password revalidation.
 - `Confirmed`: secrets use stdin and are excluded from argv, pages and audit detail.

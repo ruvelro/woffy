@@ -14,13 +14,14 @@
 - `Confirmed`: optional `telegram` sends the rendered report to the global admin destination.
 
 ## Diagnostics
-- `Confirmed`: `woffy doctor --json` reports version, binary path, SQLite availability, DB path, DB existence, user count, cron state, and Telegram state.
+- `Confirmed`: `woffy doctor --json` reports version, binary path, SQLite availability/version, DB path, DB existence, schema version, journal mode, user count, cron state, Telegram state, official Woffu API state, and scheduler tunables (`max_parallel`, `catchup_minutes`).
 - `Confirmed`: `woffy config check` initializes and validates the SQLite DB.
+- `Confirmed`: `woffy update` runs `woffy doctor` against the newly installed binary as an automatic post-install health check (see below).
 
 ## Backup And Restore
 - `Confirmed`: backups archive the whole `~/.woffy` directory.
 - `Confirmed`: restore extracts the archive and reapplies expected permissions.
 - `Confirmed`: v3 backup uses SQLite `.backup`; restore validates archive paths and database integrity before replacement.
 - `Confirmed`: events are retained by default and only `events purge --before ... --yes` deletes them.
-- `Confirmed`: self-update validates release version, checksum and syntax, keeps `.previous`, and rolls back on failed post-check.
+- `Confirmed`: self-update downloads the new binary onto the same filesystem as the installed one for an atomic `mv`, verifies checksum/syntax, rejects CRLF payloads, confirms the reported version, keeps `.previous`, takes a settings/DB safety backup before replacing the binary, and rolls back to `.previous` automatically if the post-install `woffy doctor` check fails.
 - `Confirmed`: the optional panel performs pre-maintenance backups, restore post-check/rollback and detached self-update so service restart cannot kill its updater.
