@@ -19,3 +19,6 @@
 ## Backup And Restore
 - `Confirmed`: backups archive the whole `~/.woffy` directory.
 - `Confirmed`: restore extracts the archive and reapplies expected permissions.
+- `Confirmed`: v3 backup uses SQLite `.backup`; restore validates archive paths and database integrity before replacement.
+- `Confirmed`: events are retained by default and only `events purge --before ... --yes` deletes them.
+- `Confirmed`: self-update validates release version, checksum and syntax, keeps `.previous`, and rolls back on failed post-check.

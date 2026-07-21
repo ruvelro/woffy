@@ -1,21 +1,21 @@
 # Roadmap
 
-## Phase 1: Stabilize Multi-User SQLite
-- Harden DB migrations and backward-compatibility messages.
-- Add admin commands for enabling/disabling users.
-- Add schedule editing commands for per-user overrides.
-- Expand tests around Woffu API failure modes.
+## Phase 1: Release v3 Safely
+- Validate official OAuth and `/api/v1/signs` against a Woffu test tenant.
+- Publish checksummed `v3.0.0` assets and exercise update on a VPS canary.
+- Observe two schedule windows before enabling all workers.
 
 ## Phase 2: Improve Operator Control
-- Add CSV exports by user and date range.
-- Add last-run and last-error summaries to `woffy users`.
-- Add Telegram report templates for daily operations.
+- Finish last-run/last-error summaries in `woffy users`.
+- Add Telegram report templates and alert recovery summaries.
+- Add a staging stress test for many workers and crash recovery.
 
-## Phase 3: Reduce Structural Risk
-- Split large shell sections carefully while preserving single-file distribution.
-- Consider generating the distributable script from sourced modules.
+## Phase 3: Reduce Remaining Risk
+- Remove positional passwords in the next major version.
+- Evaluate an OS keyring or encrypted secret provider compatible with unattended cron.
+- Investigate documented Woffu idempotency/reconciliation capabilities.
 
 ## Non-Goals For Now
-- No web panel in v1.
+- No web panel in v3.
 - No encrypted master passphrase because cron must run unattended.
 - No stack migration away from Bash yet.

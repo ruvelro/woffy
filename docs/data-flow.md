@@ -11,7 +11,7 @@
 
 ## Sign Flow
 1. Admin or scheduler runs `woffy in <email>`, `woffy out <email>`, or dry-run.
-2. The global lock is acquired.
+2. Manual commands acquire the global lock; scheduled workers are serialized per email by the orchestrator.
 3. A valid worker token is loaded or refreshed.
 4. `/api/signs` determines the current state.
 5. Duplicate or unsafe actions are skipped.
@@ -20,10 +20,11 @@
 
 ## Run Due Flow
 1. Cron calls `woffy run due --quiet` once per minute.
-2. The command selects active schedules matching current weekday and `HH:MM`.
-3. `run_guard` is inserted before execution.
-4. If the guard already exists, that user/action/minute is skipped.
-5. Due sign flows run per selected worker.
+2. The command selects active schedules across the catch-up window.
+3. Due slots are grouped by worker and claimed with a lease.
+4. Workers run in bounded parallelism while each worker's slots remain serial.
+5. Retryable failures set `next_retry_at`; completed and benign slots remain terminal.
+6. Stale claims can be recovered after the lease expires.
 
 ## User Administration Flow
 1. `woffy users disable <email>` sets `users.active=0` and records a warning event.
@@ -50,5 +51,11 @@
 4. Optional Telegram delivery sends the global admin report.
 
 ## Backup And Restore Flow
-1. `backup` archives the whole `~/.woffy` directory.
-2. `restore` extracts it back and reapplies expected permissions.
+1. `backup` creates a consistent SQLite snapshot and archives it with logs and a manifest.
+2. `restore` rejects unsafe paths, validates SQLite integrity, keeps a pre-restore DB and replaces atomically.
+
+## Verified Update Flow
+1. Resolve stable or nightly GitHub Release metadata.
+2. Verify SemVer, SHA-256 and Bash syntax before replacement.
+3. Preserve the current executable as `.previous`.
+4. Replace atomically and restore `.previous` if the post-check fails.

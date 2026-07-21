@@ -15,9 +15,9 @@
 - Backup: `tar`
 
 ## Install Model
-- Installer downloads `woffy.sh` from GitHub raw content.
+- Installer downloads checksummed executable assets from the latest GitHub Release; the raw script only bootstraps the installer.
 - Target binary path: `~/.local/bin/woffy`.
-- Installer optionally performs `woffy login <email> <password>`.
+- Installer temporarily accepts deprecated email/password arguments; secure login is a separate prompt/stdin command.
 - Installer clears previous woffy cron entries and installs the single `run due` orchestrator.
 
 ## Runtime Files
@@ -26,7 +26,7 @@
 - `~/.woffy/woffy.lock.d`
 
 ## Operational Commands
-- Worker setup: `woffy login <email> <password>`, `woffy users`, `woffy user <email>`, `woffy users enable|disable|delete <email>`.
+- Worker setup: `woffy login <email>` or `--password-stdin`, `woffy users`, `woffy user <email>`, `woffy users enable|disable|delete <email>`.
 - Core: `woffy status <email>`, `woffy in <email>`, `woffy out <email>`, `woffy dry-run in|out <email>`.
 - Scheduling: `woffy run due`, `woffy schedule install`, `woffy schedule list`, `woffy schedule clear`, `woffy schedule user <email> ...`.
 - Investigation: `woffy events all`, `woffy events <email> --days 30|60 --status error`.
@@ -35,4 +35,30 @@
 
 ## CI And Verification
 - CI installs `shellcheck`, `shfmt`, `bats`, and `sqlite3`.
-- CI runs shellcheck, non-blocking shfmt diff, and Bats tests.
+- CI treats shellcheck and shfmt as blocking, runs Bats on Ubuntu/macOS, verifies generated output and simulates VPS update/rollback.
+
+## systemd User Equivalent
+Cron remains the supported installer path. It must be cleared before enabling this alternative.
+
+`~/.config/systemd/user/woffy.service`:
+```ini
+[Unit]
+Description=Woffy due-slot orchestrator
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/woffy run due --quiet
+```
+
+`~/.config/systemd/user/woffy.timer`:
+```ini
+[Unit]
+Description=Run Woffy every minute
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+Unit=woffy.service
+[Install]
+WantedBy=timers.target
+```
+
+Enable with `systemctl --user daemon-reload && systemctl --user enable --now woffy.timer`. Do not run the timer alongside the cron entry; both target the same global lock.

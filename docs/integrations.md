@@ -9,6 +9,8 @@
   - `GET /api/users`
   - `GET /api/users/<id>/workdaylite`
 - `Confirmed`: tokens are stored per worker email in SQLite.
+- `Confirmed`: the public integration uses OAuth `client_credentials` with CompanyId/API key and Bearer authentication.
+- `Pending confirmation`: `/api/v1/signs` payload and permissions must be exercised against current Swagger/a Woffu test account before production enablement.
 
 ## Telegram Bot API
 - Base URL pattern: `https://api.telegram.org/bot<TG_TOKEN>/sendMessage`
@@ -24,8 +26,8 @@
 - Raw content:
   - `https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/<branch>/woffy.sh`
 - Main usage:
-  - installer bootstrap
-  - self-update
+  - installer script bootstrap
+  - checksummed stable and nightly release assets for install/self-update
   - changelog
 
 ## Local System

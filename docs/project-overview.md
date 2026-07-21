@@ -3,7 +3,7 @@
 ## Executive Summary
 - `Confirmed`: `woffy` is now a centrally managed multi-user Bash CLI for Woffu attendance automation on a VPS.
 - `Confirmed`: the runtime product remains a single executable script, `woffy.sh`, plus `install-woffy.sh`.
-- `Confirmed`: the current version in code is `2.0.0`.
+- `Confirmed`: the current development version is `3.0.0`.
 - `Confirmed`: SQLite is the source of truth for users, credentials, tokens, schedules, user cards, run guards, and events.
 
 ## Current System Shape
@@ -25,6 +25,9 @@
 - `Confirmed`: report across all users from SQLite events.
 - `Confirmed`: send Telegram admin notifications from global DB settings.
 - `Confirmed`: backup, restore, self-test, doctor, update, changelog, and uninstall remain available.
+- `Confirmed`: v3 adds schema migrations, catch-up scheduling, bounded cross-worker parallelism, per-worker serialization and persisted retry state.
+- `Confirmed`: official backdated signs use OAuth client credentials; undocumented token fallback is intentionally excluded.
+- `Confirmed`: installation and self-update consume checksummed GitHub Release assets and retain a rollback binary.
 
 ## Product Direction
 - `Confirmed`: the old single-user file model is no longer the primary interface.

@@ -1,162 +1,101 @@
-# woffy v2.0.0
+# woffy v3.0.0
 
-CLI multiusuario para automatizar fichajes de varios trabajadores en Woffu desde un VPS administrado de forma centralizada.
+CLI multiusuario para automatizar fichajes de Woffu desde un VPS administrado de forma centralizada.
 
-## Instalacion
+## Instalación
+
+Tras publicar el release `v3.0.0`:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash
+woffy login worker@example.com
 ```
 
-Con el primer trabajador:
-```bash
-curl -fsSL https://raw.githubusercontent.com/ruvelro/woffy/refs/heads/main/install-woffy.sh | bash -s - "EMAIL" "PASSWORD"
-```
+El instalador descarga los assets versionados `woffy` y `woffy.sha256`, verifica su integridad e instala en `~/.local/bin/woffy`.
 
-Dependencias runtime: `bash`, `curl`, `jq`, `awk`, `date`, `sqlite3`, `crontab`, `readlink`, `tar`.
+Dependencias: `bash`, `curl`, `jq`, `awk`, `date`, `sqlite3`, `crontab`, `readlink`, `tar` y `sha256sum` o `shasum`.
 
-## Estado local
-`woffy` usa SQLite como fuente de verdad:
+## Estado y seguridad
 
-- DB: `~/.woffy/woffy.db`
-- Log: `~/.woffy/woffy.log`
-- Lock: `~/.woffy/woffy.lock.d`
+- DB: `~/.woffy/woffy.db`, con migraciones, WAL y permisos `600`.
+- Log: `~/.woffy/woffy.log`.
+- Lock: `~/.woffy/woffy.lock.d`.
+- Credenciales, tokens y claves API se guardan sin cifrado adicional; el host debe estar controlado por un administrador de confianza.
+- La forma recomendada de login usa prompt: `woffy login <email>`. Para automatización: `printf '%s\n' "$PASSWORD" | woffy login <email> --password-stdin`.
+- `login <email> <password>` se conserva en v3 con aviso de deprecación.
 
-El directorio `~/.woffy` se crea con permisos `700` y la base con permisos `600`. Las credenciales y tokens de cada trabajador se guardan en esa DB local sin cifrado adicional.
-
-## Gestion de usuarios
-```bash
-woffy login <email> <password>
-```
-Da de alta o actualiza un trabajador. Guarda credenciales, obtiene token, descarga ficha Woffu y crea horarios por defecto si no existian.
+## Usuarios y fichajes
 
 ```bash
 woffy users
 woffy user <email>
-```
-Lista trabajadores o muestra la ficha cacheada de uno.
-
-```bash
-woffy users disable <email>
-woffy users enable <email>
-woffy users delete <email>
-```
-`disable` deja al trabajador inactivo sin borrar datos. `enable` lo reactiva. `delete` elimina credenciales, token, ficha, horarios y guardas de ejecucion, pero conserva eventos historicos y anade un evento de borrado.
-
-## Fichajes
-```bash
+woffy users enable|disable|delete <email>
 woffy status <email>
 woffy in <email>
 woffy out <email>
-woffy dry-run in <email>
-woffy dry-run out <email>
+woffy dry-run in|out <email>
 ```
-Todos los comandos usan el token del email indicado. `in` comprueba `workdaylite` y evita fichar entrada si no hay horas programadas, vacaciones/festivo, evento/ausencia o fin de semana. `dry-run` registra lo que habria hecho sin enviar fichaje.
 
-Flag global:
-```bash
---no-telegram
-```
-Evita envios de Telegram en el comando actual.
+Las entradas fallan de forma segura si Woffu no permite comprobar `workdaylite`.
 
-## Horarios por trabajador
-Los dias usan ISO: `1=lunes`, `2=martes`, ..., `7=domingo`.
+## Scheduler
 
-```bash
-woffy schedule user <email> list
-```
-Muestra horarios del trabajador.
-
-```bash
-woffy schedule user <email> set in 08:00,16:00 1,2,3,4,5
-woffy schedule user <email> set out 14:00,18:00 1,2,3,4,5
-```
-Reemplaza todos los horarios de una accion (`in` u `out`) para ese usuario. Si no se indican dias, usa `1,2,3,4,5`.
-
-```bash
-woffy schedule user <email> add in 10:00 1,2,3
-woffy schedule user <email> remove in 10:00
-```
-Anade o elimina una hora concreta.
-
-```bash
-woffy schedule user <email> clear
-woffy schedule user <email> defaults
-```
-Borra todos los horarios del trabajador o restaura los horarios por defecto: entradas `09:00`, `15:30`; salidas `14:00`, `18:00`; lunes a viernes.
-
-## Orquestador cron
 ```bash
 woffy schedule install
 woffy schedule list
 woffy schedule clear
+woffy schedule user <email> list
+woffy schedule user <email> set in 08:00,16:00 1,2,3,4,5
+woffy schedule user <email> add|remove ...
+woffy schedule user <email> clear|defaults
+woffy run due --dry-run
 ```
-`install` crea un unico cron:
 
-```cron
-* * * * * woffy run due --quiet # woffy-run-due
-```
+Cron ejecuta `woffy run due --quiet` cada minuto. Por defecto se recuperan los últimos cinco minutos, se procesan hasta cuatro trabajadores en paralelo y las acciones de cada trabajador se serializan. Los fallos reintentables conservan estado y disponen de tres intentos.
+
+Variables validadas: `WOFFY_MAX_PARALLEL`, `WOFFY_CATCHUP_MINUTES`, `WOFFY_JITTER_MAX`, `WOFFY_CURL_CONNECT_TIMEOUT`, `WOFFY_CURL_MAX_TIME`, `WOFFY_SQLITE_BUSY_MS`, `WOFFY_SCHEDULE_MAX_ATTEMPTS`, `WOFFY_CLAIM_LEASE_SECONDS` y `WOFFY_RUN_GUARD_RETENTION_DAYS`.
+
+## API oficial y retroactivos
 
 ```bash
-woffy run due [--quiet]
+woffy api configure <company-id>
+printf '%s\n' "$API_KEY" | woffy api configure <company-id> --secret-stdin
+woffy api status
+woffy api test
+woffy api clear
+woffy sign <email> in|out YYYY-MM-DD HH:MM
 ```
-Consulta SQLite cada minuto, selecciona horarios vencidos y evita duplicados con `run_guard`.
 
-## Registro e investigacion
+Usa OAuth `client_credentials` y `/api/v1/signs`. No existe fallback mediante endpoints no documentados. Un `2xx` se registra como aceptado por la API; debe validarse con una cuenta de integración antes de activar la función en producción.
+
+## Eventos, informes y mantenimiento
+
 ```bash
-woffy events all
-woffy events <email>
-woffy events <email> --days 30
-woffy events <email> --days 60 --status error
-woffy events all --status warning --format csv --limit 500
-```
-Consulta eventos guardados en SQLite. Parametros:
-
-- `all` o `<email>`: alcance de la consulta.
-- `--days N`: ventana hacia atras desde ahora; por defecto `30`.
-- `--status all|success|warning|error|dry-run`: filtro de estado; por defecto `all`.
-- `--format text|json|csv`: formato de salida; por defecto `text`.
-- `--limit N`: maximo de filas; por defecto `200`.
-
-Los eventos incluyen login, cambios administrativos, fichajes correctos, dry-runs, warnings y errores.
-
-## Reportes
-```bash
-woffy report all
-woffy report all --from YYYY-MM-DD --to YYYY-MM-DD
-woffy report all --format text|json|csv
-woffy report all telegram
-```
-Resume eventos de SQLite por rango: entradas, salidas, avisos, errores y dry-runs. Por defecto usa la semana actual.
-
-## Telegram
-```bash
-woffy telegram <bot_token> <chat_id> [thread_id] [all|errors|success]
+woffy events all|<email> [--days N] [--status STATUS] [--format text|json|csv] [--limit N]
+woffy events purge --before YYYY-MM-DD --yes
+woffy report all [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format text|json|csv] [telegram]
+woffy telegram <token> <chat-id> [thread-id] [all|errors|success]
 woffy telegram test
+woffy doctor [--json]
+woffy backup [path.tar.gz]
+woffy restore <path.tar.gz>
 ```
-Guarda notificaciones globales de administrador en SQLite. Los avisos por trabajador incluyen email y nombre si existe ficha cacheada.
 
-## Diagnostico y mantenimiento
-```bash
-woffy doctor
-woffy doctor --json
-woffy self-test
-woffy config check
-```
-Valida dependencias, DB, usuarios, cron y estado basico.
+Los eventos no se purgan automáticamente. Backup usa una snapshot SQLite consistente y restore valida rutas e integridad antes de reemplazar la DB.
+
+## Actualización y rollback
 
 ```bash
-woffy backup [ruta.tar.gz]
-woffy restore <ruta.tar.gz>
-```
-Backup y restore archivan/restauran todo `~/.woffy`.
-
-```bash
-woffy changelog
+woffy update --check
 woffy update
 woffy update nightly
-woffy uninstall
+woffy update --allow-downgrade
 ```
-Mantenimiento de version, actualizacion y desinstalacion. `uninstall` borra binario, cron y `~/.woffy`.
+
+El actualizador usa GitHub Releases, verifica versión, SHA-256 y sintaxis, conserva `woffy.previous` y restaura el binario anterior si falla el post-check.
+
+El desarrollo está modularizado en `src/`; `scripts/build-woffy.sh` genera el ejecutable distribuible y `--check` detecta divergencias.
 
 ## Licencia
-GNU GPL v3
+
+GNU GPL v3. Consulta `LICENSE`.

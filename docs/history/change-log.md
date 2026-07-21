@@ -1,5 +1,15 @@
 # Change Log
 
+## 2026-07-21 — v3.0.0 development
+- Rollback base: `b4a12a3f1c640bcff90aefde399534b48e12f59f` (`main` before v3).
+- Snapshot commit: `faeb74bf4c856a1f7aa2cc1105299a135a9443ab` on `codex/v3-massive-update`.
+- Added additive schema v3 migrations, WAL/FK connections and consistent backup/restore.
+- Added catch-up scheduling, per-worker serialization, bounded parallelism, leases and persistent retries.
+- Added fail-closed workday checks and secure credential input.
+- Added official OAuth client-credentials integration and retroactive signs.
+- Added checksummed stable/nightly release update with rollback and VPS smoke simulation.
+- Added modular sources, blocking formatting checks and Ubuntu/macOS test matrix.
+
 ## 2026-05-06
 - Implemented v2.0.0 multi-user SQLite architecture.
 - Added user administration commands for enable, disable, and delete.

@@ -9,12 +9,11 @@
 ## CI
 - `Confirmed`: GitHub Actions installs `shellcheck`, `shfmt`, `bats`, and `sqlite3`.
 - `Confirmed`: `shellcheck` is blocking.
-- `Confirmed`: `shfmt -d` is still non-blocking.
+- `Confirmed`: `shfmt -d` is blocking in v3 CI.
 - `Confirmed`: Bats is blocking.
 
 ## Remaining Test Gaps
-- Woffu malformed JSON and HTTP failures.
-- Token expiry edge cases.
-- Telegram settings and delivery filters.
-- Backup/restore DB roundtrip.
-- More output-format edge cases for JSON/CSV escaping.
+- `Confirmed`: the suite contains 34 Bats cases plus a VPS update/rollback smoke test.
+- `Confirmed`: v3 adds migration, atomic schedule, strict date, JSON escaping, fail-closed workday, official OAuth, dry-run, parallel/catch-up/retry, backup/restore and updater rollback coverage.
+- `Pending confirmation`: real Woffu Swagger/API contract and Telegram delivery require external integration credentials.
+- `Pending confirmation`: crash timing and same-worker serialization benefit from a longer-running stress test in staging.

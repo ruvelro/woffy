@@ -8,6 +8,7 @@
 
 ## SQLite State
 - `db_init`: creates all SQLite tables idempotently.
+- `ensure_run_guard_column`: performs additive migration of legacy v2 guard tables.
 - `db_exec`: executes SQLite statements.
 - `settings_get` and `settings_set`: manage global settings such as Telegram.
 - `record_event`: stores operational events and writes the diagnostic log.
@@ -26,6 +27,8 @@
 ## Multi-User Operations
 - `run_sign_flow`: shared implementation for `in`, `out`, and `dry-run` by email.
 - `run_due`: central scheduler that selects due user schedules and guards duplicate execution.
+- `claim_schedule_slot` and `process_scheduled_user`: lease/retry state and serial per-worker execution.
+- `integration_get_token` and `backfill_sign_official`: OAuth client credentials and official retroactive signs.
 - `build_report_all`: aggregates SQLite events for reports.
 - `print_events`: renders recent event history by user/status/days in text, JSON, or CSV.
 
@@ -33,6 +36,7 @@
 - `install_run_due_cron`: installs the one-minute cron orchestrator.
 - `clear_woffy_cron`: removes tagged woffy cron entries.
 - `backup_files` and `restore_files`: archive and restore `~/.woffy`.
+- `perform_update`, `semver_number`, and `sha256_file`: verified release update and rollback.
 - `doctor_json`: emits machine-readable health details.
 - `show_help`, `show_changelog`, `get_script_path`, `get_bin_path`: user and maintenance helpers.
 
