@@ -484,3 +484,84 @@ teardown() {
   run "$BIN_DIR/woffy" version
   [ "$output" = "woffy v3.0.0" ]
 }
+
+@test "update rejects invalid syntax and version mismatch" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
+  export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '#!/bin/bash\nif then\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
+  run bash "$TEST_DIR/woffy.sh" update nightly
+  [ "$status" -ne 0 ]
+  run "$BIN_DIR/woffy" version
+  [ "$output" = "woffy v3.0.0" ]
+
+  sed 's/^VERSION="3.0.0"/VERSION="3.0.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
+  run bash "$TEST_DIR/woffy.sh" update nightly
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"does not match metadata"* ]]
+}
+
+@test "stable update rejects downgrade unless explicitly allowed" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
+  export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  printf '2.9.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  run bash "$TEST_DIR/woffy.sh" update
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Refusing downgrade"* ]]
+}
+
+@test "update reports metadata network failure without replacing binary" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/missing-update"
+  export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  run bash "$TEST_DIR/woffy.sh" update --check
+  [ "$status" -ne 0 ]
+  run "$BIN_DIR/woffy" version
+  [ "$output" = "woffy v3.0.0" ]
+}
+
+@test "installer verifies release assets and installs the cron orchestrator" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/install-assets"
+  export WOFFY_INSTALL_BASE_URL="https://updates.example.test/stable"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  printf '3.0.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
+  run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
+  [ "$status" -eq 0 ]
+  run "$HOME/.local/bin/woffy" version
+  [ "$output" = "woffy v3.0.0" ]
+  grep -q '# woffy-run-due' "$CRON_FILE"
+}
+
+@test "installer rejects a release with an invalid checksum" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/install-assets"
+  export WOFFY_INSTALL_BASE_URL="https://updates.example.test/stable"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  printf '3.0.0\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
+  run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
+  [ "$status" -ne 0 ]
+  [ ! -e "$HOME/.local/bin/woffy" ]
+}
+
+@test "users shows last run and last error summaries" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  sqlite3 "$HOME/.woffy/woffy.db" "INSERT INTO events(email,action,kind,status,message,created_at) VALUES
+    ('worker@example.com','in','sign','success','ok','2026-01-02 09:00:00'),
+    ('worker@example.com','out','sign','error','bad','2026-01-02 18:00:00');"
+  run bash "$TEST_DIR/woffy.sh" users
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LAST_RUN"* ]]
+  [[ "$output" == *"LAST_ERROR"* ]]
+  [[ "$output" == *"2026-01-02 18:00:00"* ]]
+}
