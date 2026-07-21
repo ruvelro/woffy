@@ -34,11 +34,33 @@ EOF
 set -euo pipefail
 echo "$*" >> "${TEST_DIR}/curl.calls"
 args="$*"
+if [ -n "${WOFFY_UPDATE_FIXTURE_DIR:-}" ] && [[ "$args" == *"/stable/woffy"* || "$args" == *"/nightly/woffy"* ]]; then
+  source_name=""
+  output=""
+  previous=""
+  for item in "$@"; do
+    case "$item" in */woffy|*/woffy.version|*/woffy.sha256) source_name="${item##*/}" ;; esac
+    if [ "$previous" = "-o" ]; then output="$item"; break; fi
+    previous="$item"
+  done
+  [ -n "$source_name" ] || exit 1
+  if [ -n "$output" ]; then
+    cp "$WOFFY_UPDATE_FIXTURE_DIR/$source_name" "$output"
+  else
+    cat "$WOFFY_UPDATE_FIXTURE_DIR/$source_name"
+  fi
+  exit 0
+fi
 if [[ "$args" == *"/token"* ]]; then
+  if [ -f "${TEST_DIR}/fail_token" ]; then
+    printf '{"error":"invalid_grant"}\n'
+    exit 0
+  fi
   printf '{"access_token":"token-%s","expires_in":%s}\n' "$(date +%s)" "${WOFFY_TOKEN_EXPIRES_IN:-3600}"
   exit 0
 fi
 if [[ "$args" == *"/api/users/"*"/workdaylite"* ]]; then
+  if [ -f "${TEST_DIR}/fail_workday" ]; then exit 1; fi
   printf '{"ScheduleHours":8,"IsWeekend":false,"IsHoliday":false,"IsEvent":false}\n'
   exit 0
 fi
@@ -46,7 +68,15 @@ if [[ "$args" == *"/api/users"* ]]; then
   printf '[{"UserId":"u-1","FullName":"Test User","CompanyName":"Acme","OfficeName":"HQ","Schedule":{"Name":"Default"}}]\n'
   exit 0
 fi
+if [[ "$args" == *"/api/v1/signs"* && "$args" == *"-X POST"* ]]; then
+  printf '{}\n200\n'
+  exit 0
+fi
 if [[ "$args" == *"/api/signs"* && "$args" == *"-X POST"* ]]; then
+  if [ -f "${TEST_DIR}/fail_sign" ]; then
+    printf '{}\n500\n'
+    exit 0
+  fi
   printf '{}\n200\n'
   exit 0
 fi
@@ -246,9 +276,211 @@ teardown() {
   [[ "$output" == *"\"users\":1"* ]]
 }
 
-@test "update nightly uses nightly branch url" {
+@test "schedule set validates everything before replacing existing rows" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  before="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT group_concat(time_hhmm,',') FROM schedules WHERE email='worker@example.com' AND action='in' ORDER BY time_hhmm;")"
+  run bash "$TEST_DIR/woffy.sh" schedule user worker@example.com set in 08:00,invalid 1,2,3
+  [ "$status" -ne 0 ]
+  after="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT group_concat(time_hhmm,',') FROM schedules WHERE email='worker@example.com' AND action='in' ORDER BY time_hhmm;")"
+  [ "$after" = "$before" ]
+}
+
+@test "report rejects impossible and inverted date ranges" {
+  run bash "$TEST_DIR/woffy.sh" report all --from 2025-99-99 --to 2026-01-01
+  [ "$status" -ne 0 ]
+  run bash "$TEST_DIR/woffy.sh" report all --from 2026-02-02 --to 2026-02-01
+  [ "$status" -ne 0 ]
+}
+
+@test "events json correctly escapes backslashes and newlines" {
+  run bash "$TEST_DIR/woffy.sh" config check
+  [ "$status" -eq 0 ]
+  sqlite3 "$HOME/.woffy/woffy.db" "INSERT INTO events(email,action,kind,status,message,created_at) VALUES('a@example.com','in','sign','error','path' || char(92) || 'q' || char(10) || 'next',datetime('now','localtime'));"
+  run bash "$TEST_DIR/woffy.sh" events all --format json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.[0].message == "path\\q\nnext"' >/dev/null
+}
+
+@test "telegram test fails when no destination is configured" {
+  run bash "$TEST_DIR/woffy.sh" telegram test
+  [ "$status" -ne 0 ]
+}
+
+@test "migration upgrades a v2 run_guard table additively" {
+  mkdir -p "$HOME/.woffy"
+  sqlite3 "$HOME/.woffy/woffy.db" "CREATE TABLE run_guard(email TEXT NOT NULL,action TEXT NOT NULL,run_date TEXT NOT NULL,time_hhmm TEXT NOT NULL,PRIMARY KEY(email,action,run_date,time_hhmm)); INSERT INTO run_guard VALUES('a@example.com','in','2026-01-01','09:00');"
+  run bash "$TEST_DIR/woffy.sh" config check
+  [ "$status" -eq 0 ]
+  state="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT state FROM run_guard;")"
+  version="$(sqlite3 "$HOME/.woffy/woffy.db" "PRAGMA user_version;")"
+  [ "$state" = "success" ]
+  [ "$version" = "3" ]
+}
+
+@test "clock in fails closed when workday cannot be verified" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  touch "$TEST_DIR/fail_workday"
+  run bash "$TEST_DIR/woffy.sh" in worker@example.com
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Cannot verify workday"* ]]
+}
+
+@test "official backfill uses client credentials and bearer token" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  sqlite3 "$HOME/.woffy/woffy.db" "UPDATE user_cards SET woffu_user_id='110654' WHERE email='worker@example.com';"
+  run bash -c "printf '%s\n' 'API-SECRET' | '$TEST_DIR/woffy.sh' api configure 123 --secret-stdin"
+  [ "$status" -eq 0 ]
+  run bash "$TEST_DIR/woffy.sh" sign worker@example.com in 2026-01-01 09:00
+  [ "$status" -eq 0 ]
+  calls="$(cat "$TEST_DIR/curl.calls")"
+  [[ "$calls" == *"grant_type=client_credentials"* ]]
+  [[ "$calls" == *"/api/v1/signs"* ]]
+  [[ "$calls" != *"API-SECRET"* ]]
+}
+
+@test "run due dry-run neither signs nor creates guards" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  now_hhmm="$(date '+%H:%M')"
+  dow="$(date '+%u')"
+  sqlite3 "$HOME/.woffy/woffy.db" "DELETE FROM schedules; INSERT INTO schedules(email,action,time_hhmm,weekdays,active) VALUES('worker@example.com','in','$now_hhmm','$dow',1);"
+  before="$(wc -l < "$TEST_DIR/curl.calls")"
+  run bash "$TEST_DIR/woffy.sh" run due --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DRY-RUN"* ]]
+  guards="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT COUNT(*) FROM run_guard;")"
+  after="$(wc -l < "$TEST_DIR/curl.calls")"
+  [ "$guards" = "0" ]
+  [ "$after" = "$before" ]
+}
+
+@test "update nightly verifies checksum and replaces the installed binary" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
+  export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  sed 's/^VERSION="3.0.0"/VERSION="3.0.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
+  run bash "$TEST_DIR/woffy.sh" update nightly
+  [ "$status" -eq 0 ]
+  run "$BIN_DIR/woffy" version
+  [ "$output" = "woffy v3.0.1" ]
+  [ -f "$BIN_DIR/woffy.previous" ]
+}
+
+@test "update keeps the current binary on checksum or post-check failure" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
+  export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  sed 's/^VERSION="3.0.0"/VERSION="3.0.1"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
-  calls="$(cat "$TEST_DIR/curl.calls")"
-  [[ "$calls" == *"refs/heads/nightly/woffy.sh"* ]]
+  run "$BIN_DIR/woffy" version
+  [ "$output" = "woffy v3.0.0" ]
+
+  (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
+  export WOFFY_TEST_UPDATE_POSTCHECK_FAIL=true
+  run bash "$TEST_DIR/woffy.sh" update nightly
+  [ "$status" -ne 0 ]
+  run "$BIN_DIR/woffy" version
+  [ "$output" = "woffy v3.0.0" ]
+}
+
+@test "run due processes different workers in one orchestrator run" {
+  for user in a b c; do
+    run bash "$TEST_DIR/woffy.sh" login "$user@example.com" secret
+    [ "$status" -eq 0 ]
+  done
+  now_hhmm="$(date '+%H:%M')"
+  dow="$(date '+%u')"
+  sqlite3 "$HOME/.woffy/woffy.db" "DELETE FROM schedules; INSERT INTO schedules(email,action,time_hhmm,weekdays,active) VALUES
+    ('a@example.com','in','$now_hhmm','$dow',1),('b@example.com','in','$now_hhmm','$dow',1),('c@example.com','in','$now_hhmm','$dow',1);"
+  run bash "$TEST_DIR/woffy.sh" run due
+  [ "$status" -eq 0 ]
+  success_count="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT COUNT(*) FROM events WHERE action='in' AND status='success';")"
+  guard_count="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT COUNT(*) FROM run_guard WHERE state='success';")"
+  [ "$success_count" = "3" ]
+  [ "$guard_count" = "3" ]
+}
+
+@test "run due recovers a slot inside the catch-up window" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  past_hhmm="$(date -d '-2 minutes' '+%H:%M' 2>/dev/null || date -v-2M '+%H:%M')"
+  past_dow="$(date -d '-2 minutes' '+%u' 2>/dev/null || date -v-2M '+%u')"
+  sqlite3 "$HOME/.woffy/woffy.db" "DELETE FROM schedules; INSERT INTO schedules(email,action,time_hhmm,weekdays,active) VALUES('worker@example.com','in','$past_hhmm','$past_dow',1);"
+  run bash "$TEST_DIR/woffy.sh" run due
+  [ "$status" -eq 0 ]
+  guard_time="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT time_hhmm FROM run_guard WHERE email='worker@example.com';")"
+  [ "$guard_time" = "$past_hhmm" ]
+}
+
+@test "retryable scheduled failure keeps state and later recovers" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  now_hhmm="$(date '+%H:%M')"
+  dow="$(date '+%u')"
+  sqlite3 "$HOME/.woffy/woffy.db" "DELETE FROM schedules; INSERT INTO schedules(email,action,time_hhmm,weekdays,active) VALUES('worker@example.com','in','$now_hhmm','$dow',1);"
+  touch "$TEST_DIR/fail_sign"
+  run bash "$TEST_DIR/woffy.sh" run due
+  [ "$status" -ne 0 ]
+  state="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT state FROM run_guard;")"
+  [ "$state" = "retryable" ]
+  rm -f "$TEST_DIR/fail_sign"
+  sqlite3 "$HOME/.woffy/woffy.db" "UPDATE run_guard SET next_retry_at=datetime('now','-1 minute');"
+  run bash "$TEST_DIR/woffy.sh" run due
+  [ "$status" -eq 0 ]
+  result="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT state || ':' || attempts FROM run_guard;")"
+  [ "$result" = "success:2" ]
+}
+
+@test "runtime tunables reject zero parallelism and SQL-like values" {
+  run env WOFFY_MAX_PARALLEL=0 bash "$TEST_DIR/woffy.sh" version
+  [ "$status" -ne 0 ]
+  run env WOFFY_RUN_GUARD_RETENTION_DAYS="1'); DROP TABLE users;--" bash "$TEST_DIR/woffy.sh" version
+  [ "$status" -ne 0 ]
+}
+
+@test "backup and restore use a consistent sqlite snapshot" {
+  run bash "$TEST_DIR/woffy.sh" login worker@example.com secret
+  [ "$status" -eq 0 ]
+  backup="$TEST_DIR/backup.tar.gz"
+  run bash "$TEST_DIR/woffy.sh" backup "$backup"
+  [ "$status" -eq 0 ]
+  sqlite3 "$HOME/.woffy/woffy.db" "DELETE FROM users;"
+  run bash "$TEST_DIR/woffy.sh" restore "$backup"
+  [ "$status" -eq 0 ]
+  count="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT COUNT(*) FROM users WHERE email='worker@example.com';")"
+  [ "$count" = "1" ]
+  [ "$(sqlite3 "$HOME/.woffy/woffy.db" 'PRAGMA integrity_check;')" = "ok" ]
+}
+
+@test "event purge requires explicit date and confirmation" {
+  run bash "$TEST_DIR/woffy.sh" config check
+  [ "$status" -eq 0 ]
+  sqlite3 "$HOME/.woffy/woffy.db" "INSERT INTO events(email,action,kind,status,message,created_at) VALUES('a@example.com','in','sign','success','old','2020-01-01 00:00:00');"
+  run bash "$TEST_DIR/woffy.sh" events purge --before 2021-01-01
+  [ "$status" -ne 0 ]
+  run bash "$TEST_DIR/woffy.sh" events purge --before 2021-01-01 --yes
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Purged 1"* ]]
+}
+
+@test "update check reads metadata without replacing the binary" {
+  export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
+  export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
+  mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
+  printf '3.0.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  run bash "$TEST_DIR/woffy.sh" update --check
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Available (stable): v3.0.1"* ]]
+  run "$BIN_DIR/woffy" version
+  [ "$output" = "woffy v3.0.0" ]
 }
