@@ -614,6 +614,10 @@ def integrations_action(
                 ["telegram", "configure", "--token-stdin", chat_id, thread_id, notify],
                 secret + "\n",
             )
+        elif operation == "telegram-set-mode":
+            if notify not in {"all", "errors", "success"}:
+                raise CommandError("A valid notification mode is required")
+            result = invoke(operation, "telegram", ["telegram", "set-mode", notify])
         elif operation in {"telegram-test", "telegram-clear"}:
             result = invoke(operation, "telegram", ["telegram", operation.split("-", 1)[1]])
         elif operation == "api-configure":

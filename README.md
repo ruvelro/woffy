@@ -1,4 +1,4 @@
-# woffy v3.1.1
+# woffy v3.1.2
 
 CLI multiusuario para automatizar fichajes de Woffu desde un VPS administrado de forma centralizada.
 
@@ -75,6 +75,7 @@ woffy events all|<email> [--days N] [--status STATUS] [--format text|json|csv] [
 woffy events purge --before YYYY-MM-DD --yes
 woffy report all [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--format text|json|csv] [telegram]
 printf '%s\n' "$TG_TOKEN" | woffy telegram configure --token-stdin <chat-id> [thread-id] [all|errors|success]
+woffy telegram set-mode all|errors|success
 woffy telegram test
 woffy telegram clear
 woffy config list|get|set|reset

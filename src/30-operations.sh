@@ -375,7 +375,7 @@ Usage:
   woffy schedule user <email> remove {in|out} HH:MM
   woffy schedule user <email> clear
   woffy schedule user <email> defaults
-  woffy telegram {configure --token-stdin <chat-id> [thread-id] [mode]|test|clear}
+  woffy telegram {configure --token-stdin <chat-id> [thread-id] [mode]|set-mode {all|errors|success}|test|clear}
   woffy config {check|list|get|set|reset}
   woffy web {install|update|start|stop|restart|status|logs|passwd|serve|uninstall}
   woffy doctor [--json]

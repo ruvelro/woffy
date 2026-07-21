@@ -361,14 +361,14 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  sed 's/^VERSION="3.1.1"/VERSION="3.1.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.2"/VERSION="3.1.3"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.3\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -eq 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.2" ]
+  [ "$output" = "woffy v3.1.3" ]
   [ -f "$BIN_DIR/woffy.previous" ]
 }
 
@@ -376,21 +376,21 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  sed 's/^VERSION="3.1.1"/VERSION="3.1.2"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.2"/VERSION="3.1.3"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.3\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.1" ]
+  [ "$output" = "woffy v3.1.2" ]
 
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   export WOFFY_TEST_UPDATE_POSTCHECK_FAIL=true
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.1" ]
+  [ "$output" = "woffy v3.1.2" ]
 }
 
 @test "run due processes different workers in one orchestrator run" {
@@ -477,28 +477,28 @@ teardown() {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.3\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   run bash "$TEST_DIR/woffy.sh" update --check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Available (stable): v3.1.2"* ]]
+  [[ "$output" == *"Available (stable): v3.1.3"* ]]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.1" ]
+  [ "$output" = "woffy v3.1.2" ]
 }
 
 @test "update rejects invalid syntax and version mismatch" {
   export WOFFY_UPDATE_FIXTURE_DIR="$TEST_DIR/update"
   export WOFFY_UPDATE_BASE_URL="https://updates.example.test"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
-  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.3\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf '#!/bin/bash\nif then\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.1" ]
+  [ "$output" = "woffy v3.1.2" ]
 
-  sed 's/^VERSION="3.1.1"/VERSION="3.1.3"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
+  sed 's/^VERSION="3.1.2"/VERSION="3.1.4"/' "$TEST_DIR/woffy.sh" > "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$TEST_DIR/woffy.sh" update nightly
@@ -523,7 +523,7 @@ teardown() {
   run bash "$TEST_DIR/woffy.sh" update --check
   [ "$status" -ne 0 ]
   run "$BIN_DIR/woffy" version
-  [ "$output" = "woffy v3.1.1" ]
+  [ "$output" = "woffy v3.1.2" ]
 }
 
 @test "installer verifies release assets and installs the cron orchestrator" {
@@ -532,12 +532,12 @@ teardown() {
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
   cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
   chmod +x "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   (cd "$WOFFY_UPDATE_FIXTURE_DIR" && { sha256sum woffy 2>/dev/null || shasum -a 256 woffy; }) > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
   [ "$status" -eq 0 ]
   run "$HOME/.local/bin/woffy" version
-  [ "$output" = "woffy v3.1.1" ]
+  [ "$output" = "woffy v3.1.2" ]
   grep -q '# woffy-run-due' "$CRON_FILE"
 }
 
@@ -546,7 +546,7 @@ teardown() {
   export WOFFY_INSTALL_BASE_URL="https://updates.example.test/stable"
   mkdir -p "$WOFFY_UPDATE_FIXTURE_DIR"
   cp "$TEST_DIR/woffy.sh" "$WOFFY_UPDATE_FIXTURE_DIR/woffy"
-  printf '3.1.1\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
+  printf '3.1.2\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.version"
   printf 'bad  woffy\n' > "$WOFFY_UPDATE_FIXTURE_DIR/woffy.sha256"
   run bash "$BATS_TEST_DIRNAME/../install-woffy.sh"
   [ "$status" -ne 0 ]
@@ -598,6 +598,21 @@ teardown() {
   [ "$status" -eq 0 ]
   configured="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT COUNT(*) FROM settings WHERE key='TG_TOKEN';")"
   [ "$configured" = "0" ]
+}
+
+@test "telegram set-mode changes only the notification mode" {
+  run bash -c "printf '%s\n' 'BOT-SECRET' | '$TEST_DIR/woffy.sh' telegram configure --token-stdin 123 '' all"
+  [ "$status" -eq 0 ]
+  run bash "$TEST_DIR/woffy.sh" telegram set-mode errors
+  [ "$status" -eq 0 ]
+  token="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT value FROM settings WHERE key='TG_TOKEN';")"
+  chat_id="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT value FROM settings WHERE key='TG_CHAT_ID';")"
+  notify="$(sqlite3 "$HOME/.woffy/woffy.db" "SELECT value FROM settings WHERE key='TG_NOTIFY';")"
+  [ "$token" = "BOT-SECRET" ]
+  [ "$chat_id" = "123" ]
+  [ "$notify" = "errors" ]
+  run bash "$TEST_DIR/woffy.sh" telegram set-mode bogus
+  [ "$status" -ne 0 ]
 }
 
 @test "schema v4 adds event correlation without rewriting historical events" {

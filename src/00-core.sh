@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="3.1.1"
+VERSION="3.1.2"
 
 WOFFY_HOME="${WOFFY_HOME:-$HOME/.woffy}"
 DB_FILE="${WOFFY_DB_FILE:-$WOFFY_HOME/woffy.db}"

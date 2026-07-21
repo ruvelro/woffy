@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="3.1.1"
+VERSION="3.1.2"
 
 WOFFY_HOME="${WOFFY_HOME:-$HOME/.woffy}"
 DB_FILE="${WOFFY_DB_FILE:-$WOFFY_HOME/woffy.db}"
@@ -1619,7 +1619,7 @@ Usage:
   woffy schedule user <email> remove {in|out} HH:MM
   woffy schedule user <email> clear
   woffy schedule user <email> defaults
-  woffy telegram {configure --token-stdin <chat-id> [thread-id] [mode]|test|clear}
+  woffy telegram {configure --token-stdin <chat-id> [thread-id] [mode]|set-mode {all|errors|success}|test|clear}
   woffy config {check|list|get|set|reset}
   woffy web {install|update|start|stop|restart|status|logs|passwd|serve|uninstall}
   woffy doctor [--json]
@@ -2464,6 +2464,17 @@ case "${1:-}" in
       echo "OK Telegram settings removed."
       exit 0
     fi
+    if [ "${2:-}" = "set-mode" ]; then
+      case "${3:-}" in all | errors | success) ;; *)
+        echo "Usage: woffy telegram set-mode {all|errors|success}"
+        exit 1
+        ;;
+      esac
+      settings_set TG_NOTIFY "$3"
+      record_event "" "telegram" "admin" "success" "Telegram notification mode changed to $3."
+      echo "OK Telegram notification mode set to $3."
+      exit 0
+    fi
     if [ $# -ge 3 ]; then
       settings_set TG_TOKEN "$2"
       settings_set TG_CHAT_ID "$3"
@@ -2474,7 +2485,7 @@ case "${1:-}" in
       echo "OK Telegram settings saved."
       exit 0
     fi
-    echo "Usage: woffy telegram {configure --token-stdin <chat-id> [thread-id] [mode]|test|clear}"
+    echo "Usage: woffy telegram {configure --token-stdin <chat-id> [thread-id] [mode]|set-mode {all|errors|success}|test|clear}"
     ;;
 
   config)
