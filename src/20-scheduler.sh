@@ -74,6 +74,7 @@ run_due() {
   db_init
   acquire_lock
   slots_file="$(mktemp)"
+  RUN_DUE_TMP="$slots_file"
 
   for ((i = CATCHUP_MINUTES - 1; i >= 0; i--)); do
     parts="$(minute_ago_parts "$i")" || continue
@@ -91,12 +92,14 @@ run_due() {
 
   if [ ! -s "$slots_file" ]; then
     rm -f "$slots_file"
+    RUN_DUE_TMP=""
     $QUIET || echo "No due users for the last $CATCHUP_MINUTES minute(s)."
     return 0
   fi
   if [ "$dry_run" = "true" ]; then
     awk -F'\t' '{printf "DRY-RUN %s %s %s %s\n",$1,$2,$3,$4}' "$slots_file"
     rm -f "$slots_file"
+    RUN_DUE_TMP=""
     return 0
   fi
 
@@ -115,7 +118,7 @@ run_due() {
     wait "$pid" || failures=$((failures + 1))
   done
   rm -f "$slots_file"
+  RUN_DUE_TMP=""
   db_exec "DELETE FROM run_guard WHERE run_date < date('now','localtime','-$RUN_GUARD_RETENTION_DAYS days');" || true
   [ "$failures" -eq 0 ]
 }
-

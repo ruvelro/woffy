@@ -27,7 +27,6 @@ get_token() {
   if [ -z "$token" ] || [ "$token" = "null" ]; then
     record_event "$email" "auth" "auth" "error" "Woffu authentication failed"
     echo "ERROR Could not authenticate $email with Woffu" >&2
-    tg_send error "woffy: auth failed for $email" || true
     return 1
   fi
 
@@ -257,6 +256,7 @@ run_sign_flow() {
   fi
   if ! TOKEN="$(get_token "$email")"; then
     [ "$quiet" = "true" ] || echo "ERROR $email: authentication failed."
+    [ "$send_notifications" = "true" ] && notify_user_result error "$email" "Authentication failed."
     return 75
   fi
   st="$(get_status)"
@@ -360,4 +360,3 @@ run_sign_flow() {
   [ "$send_notifications" = "true" ] && notify_user_result error "$email" "$msg"
   return 75
 }
-

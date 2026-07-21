@@ -137,6 +137,10 @@ restore_files() {
     echo "ERROR Unsafe backup paths detected" >&2
     return 1
   fi
+  if tar -tvzf "$in" | awk '$1 ~ /^[lh]/{bad=1} END{exit bad?0:1}'; then
+    echo "ERROR Backup links are not allowed" >&2
+    return 1
+  fi
   tmp="$(mktemp -d)"
   tar -xzf "$in" -C "$tmp" >/dev/null 2>&1 || {
     rm -rf "$tmp"
@@ -185,10 +189,10 @@ install_run_due_cron() {
 
 show_changelog() {
   local remote_version commits
-  remote_version="$(curl -fsSL "$REPO_RAW_BASE/woffy.sh" | awk -F\" '/^VERSION=/{print $2; exit}' 2>/dev/null || echo "unknown")"
+  remote_version="$(curl -fsSL --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$REPO_RAW_BASE/woffy.sh" | awk -F\" '/^VERSION=/{print $2; exit}' 2>/dev/null || echo "unknown")"
   echo "Local:  v$VERSION"
   echo "Remote: v$remote_version"
-  commits="$(curl -fsSL "https://api.github.com/repos/ruvelro/woffy/commits?per_page=8" |
+  commits="$(curl -fsSL --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "https://api.github.com/repos/ruvelro/woffy/commits?per_page=8" |
     jq -r '.[] | "- " + (.sha[0:7]) + " " + .commit.message' 2>/dev/null || true)"
   [ -n "$commits" ] && echo "$commits"
 }
@@ -391,4 +395,3 @@ doctor_json() {
       scheduler:{max_parallel:$max_parallel,catchup_minutes:$catchup}}'
   $sqlite_ok
 }
-

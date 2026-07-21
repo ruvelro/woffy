@@ -324,6 +324,9 @@ acquire_lock() {
 }
 
 release_lock() {
+  if [ -n "${RUN_DUE_TMP:-}" ] && [ -f "$RUN_DUE_TMP" ]; then
+    rm -f "$RUN_DUE_TMP"
+  fi
   [ -f "$LOCK_DIR/pid" ] && rm -f "$LOCK_DIR/pid"
   rmdir "$LOCK_DIR" 2>/dev/null || true
 }
@@ -437,10 +440,12 @@ seed_default_schedule() {
 
 print_users() {
   db_init
-  db_exec "SELECT users.email || char(9) || COALESCE(user_cards.full_name,'') || char(9) || CASE users.active WHEN 1 THEN 'active' ELSE 'inactive' END
+  db_exec "SELECT users.email || char(9) || COALESCE(user_cards.full_name,'') || char(9) || CASE users.active WHEN 1 THEN 'active' ELSE 'inactive' END || char(9) ||
+                  COALESCE((SELECT MAX(created_at) FROM events WHERE events.email=users.email AND kind='sign'),'') || char(9) ||
+                  COALESCE((SELECT MAX(created_at) FROM events WHERE events.email=users.email AND status='error'),'')
            FROM users LEFT JOIN user_cards ON user_cards.email=users.email
            ORDER BY users.email;" |
-    awk 'BEGIN{FS="\t"; printf "%-34s %-30s %s\n","EMAIL","NAME","STATUS"} {printf "%-34s %-30s %s\n",$1,$2,$3}'
+    awk 'BEGIN{FS="\t"; printf "%-34s %-24s %-8s %-19s %s\n","EMAIL","NAME","STATUS","LAST_RUN","LAST_ERROR"} {printf "%-34s %-24s %-8s %-19s %s\n",$1,$2,$3,$4,$5}'
 }
 
 set_user_active() {
@@ -594,7 +599,6 @@ reset_default_schedule() {
   record_event "$email" "schedule" "admin" "success" "Default schedules restored."
   echo "OK Default schedules restored for $email"
 }
-
 get_token() {
   local email="$1"
   local now token exp password response expires
@@ -624,7 +628,6 @@ get_token() {
   if [ -z "$token" ] || [ "$token" = "null" ]; then
     record_event "$email" "auth" "auth" "error" "Woffu authentication failed"
     echo "ERROR Could not authenticate $email with Woffu" >&2
-    tg_send error "woffy: auth failed for $email" || true
     return 1
   fi
 
@@ -854,6 +857,7 @@ run_sign_flow() {
   fi
   if ! TOKEN="$(get_token "$email")"; then
     [ "$quiet" = "true" ] || echo "ERROR $email: authentication failed."
+    [ "$send_notifications" = "true" ] && notify_user_result error "$email" "Authentication failed."
     return 75
   fi
   st="$(get_status)"
@@ -957,7 +961,6 @@ run_sign_flow() {
   [ "$send_notifications" = "true" ] && notify_user_result error "$email" "$msg"
   return 75
 }
-
 minute_ago_parts() {
   local minutes="$1"
   if date -d "-$minutes minutes" '+%Y-%m-%d|%H:%M|%u' 2>/dev/null; then
@@ -1034,6 +1037,7 @@ run_due() {
   db_init
   acquire_lock
   slots_file="$(mktemp)"
+  RUN_DUE_TMP="$slots_file"
 
   for ((i = CATCHUP_MINUTES - 1; i >= 0; i--)); do
     parts="$(minute_ago_parts "$i")" || continue
@@ -1051,12 +1055,14 @@ run_due() {
 
   if [ ! -s "$slots_file" ]; then
     rm -f "$slots_file"
+    RUN_DUE_TMP=""
     $QUIET || echo "No due users for the last $CATCHUP_MINUTES minute(s)."
     return 0
   fi
   if [ "$dry_run" = "true" ]; then
     awk -F'\t' '{printf "DRY-RUN %s %s %s %s\n",$1,$2,$3,$4}' "$slots_file"
     rm -f "$slots_file"
+    RUN_DUE_TMP=""
     return 0
   fi
 
@@ -1075,10 +1081,10 @@ run_due() {
     wait "$pid" || failures=$((failures + 1))
   done
   rm -f "$slots_file"
+  RUN_DUE_TMP=""
   db_exec "DELETE FROM run_guard WHERE run_date < date('now','localtime','-$RUN_GUARD_RETENTION_DAYS days');" || true
   [ "$failures" -eq 0 ]
 }
-
 build_report_all() {
   local since="$1"
   local until="$2"
@@ -1218,6 +1224,10 @@ restore_files() {
     echo "ERROR Unsafe backup paths detected" >&2
     return 1
   fi
+  if tar -tvzf "$in" | awk '$1 ~ /^[lh]/{bad=1} END{exit bad?0:1}'; then
+    echo "ERROR Backup links are not allowed" >&2
+    return 1
+  fi
   tmp="$(mktemp -d)"
   tar -xzf "$in" -C "$tmp" >/dev/null 2>&1 || {
     rm -rf "$tmp"
@@ -1266,10 +1276,10 @@ install_run_due_cron() {
 
 show_changelog() {
   local remote_version commits
-  remote_version="$(curl -fsSL "$REPO_RAW_BASE/woffy.sh" | awk -F\" '/^VERSION=/{print $2; exit}' 2>/dev/null || echo "unknown")"
+  remote_version="$(curl -fsSL --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$REPO_RAW_BASE/woffy.sh" | awk -F\" '/^VERSION=/{print $2; exit}' 2>/dev/null || echo "unknown")"
   echo "Local:  v$VERSION"
   echo "Remote: v$remote_version"
-  commits="$(curl -fsSL "https://api.github.com/repos/ruvelro/woffy/commits?per_page=8" |
+  commits="$(curl -fsSL --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "https://api.github.com/repos/ruvelro/woffy/commits?per_page=8" |
     jq -r '.[] | "- " + (.sha[0:7]) + " " + .commit.message' 2>/dev/null || true)"
   [ -n "$commits" ] && echo "$commits"
 }
@@ -1472,7 +1482,6 @@ doctor_json() {
       scheduler:{max_parallel:$max_parallel,catchup_minutes:$catchup}}'
   $sqlite_ok
 }
-
 validate_runtime_config
 
 case "${1:-}" in

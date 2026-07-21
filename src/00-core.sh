@@ -324,6 +324,9 @@ acquire_lock() {
 }
 
 release_lock() {
+  if [ -n "${RUN_DUE_TMP:-}" ] && [ -f "$RUN_DUE_TMP" ]; then
+    rm -f "$RUN_DUE_TMP"
+  fi
   [ -f "$LOCK_DIR/pid" ] && rm -f "$LOCK_DIR/pid"
   rmdir "$LOCK_DIR" 2>/dev/null || true
 }
@@ -437,10 +440,12 @@ seed_default_schedule() {
 
 print_users() {
   db_init
-  db_exec "SELECT users.email || char(9) || COALESCE(user_cards.full_name,'') || char(9) || CASE users.active WHEN 1 THEN 'active' ELSE 'inactive' END
+  db_exec "SELECT users.email || char(9) || COALESCE(user_cards.full_name,'') || char(9) || CASE users.active WHEN 1 THEN 'active' ELSE 'inactive' END || char(9) ||
+                  COALESCE((SELECT MAX(created_at) FROM events WHERE events.email=users.email AND kind='sign'),'') || char(9) ||
+                  COALESCE((SELECT MAX(created_at) FROM events WHERE events.email=users.email AND status='error'),'')
            FROM users LEFT JOIN user_cards ON user_cards.email=users.email
            ORDER BY users.email;" |
-    awk 'BEGIN{FS="\t"; printf "%-34s %-30s %s\n","EMAIL","NAME","STATUS"} {printf "%-34s %-30s %s\n",$1,$2,$3}'
+    awk 'BEGIN{FS="\t"; printf "%-34s %-24s %-8s %-19s %s\n","EMAIL","NAME","STATUS","LAST_RUN","LAST_ERROR"} {printf "%-34s %-24s %-8s %-19s %s\n",$1,$2,$3,$4,$5}'
 }
 
 set_user_active() {
@@ -594,4 +599,3 @@ reset_default_schedule() {
   record_event "$email" "schedule" "admin" "success" "Default schedules restored."
   echo "OK Default schedules restored for $email"
 }
-

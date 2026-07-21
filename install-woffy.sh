@@ -6,9 +6,10 @@ INSTALL_PATH="$INSTALL_DIR/woffy"
 ASSET_BASE="${WOFFY_INSTALL_BASE_URL:-https://github.com/ruvelro/woffy/releases/latest/download}"
 tmp_bin="$(mktemp)"
 tmp_sum="$(mktemp)"
+tmp_version="$(mktemp)"
 
 cleanup() {
-  rm -f "$tmp_bin" "$tmp_sum"
+  rm -f "$tmp_bin" "$tmp_sum" "$tmp_version"
 }
 trap cleanup EXIT
 
@@ -31,6 +32,7 @@ echo "Installing woffy in user mode (no sudo)..."
 mkdir -p "$INSTALL_DIR"
 curl -fsSL --connect-timeout 5 --max-time 30 "$ASSET_BASE/woffy" -o "$tmp_bin"
 curl -fsSL --connect-timeout 5 --max-time 30 "$ASSET_BASE/woffy.sha256" -o "$tmp_sum"
+curl -fsSL --connect-timeout 5 --max-time 30 "$ASSET_BASE/woffy.version" -o "$tmp_version"
 expected="$(awk 'NR==1{print $1}' "$tmp_sum")"
 if [ "$SHA_TOOL" = "sha256sum" ]; then
   actual="$(sha256sum "$tmp_bin" | awk '{print $1}')"
@@ -43,6 +45,12 @@ fi
 }
 bash -n "$tmp_bin"
 chmod +x "$tmp_bin"
+expected_version="$(sed -n '1{s/^v//;p;}' "$tmp_version")"
+binary_version="$("$tmp_bin" version | awk '/^woffy v/{sub(/^woffy v/,"");print;exit}')"
+[ -n "$expected_version" ] && [ "$expected_version" = "$binary_version" ] || {
+  echo "ERROR Downloaded binary version does not match release metadata" >&2
+  exit 1
+}
 mv "$tmp_bin" "$INSTALL_PATH"
 echo "woffy installed at $INSTALL_PATH"
 
