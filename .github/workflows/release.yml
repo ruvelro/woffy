@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        default: nightly
+        type: choice
+        options: [nightly]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release assets
+        run: |
+          version="$(awk -F'"' '/^VERSION=/{print $2; exit}' woffy.sh)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "Tag and VERSION differ" >&2
+            exit 1
+          fi
+          cp woffy.sh woffy
+          chmod +x woffy
+          printf '%s\n' "$version" > woffy.version
+          sha256sum woffy > woffy.sha256
+          bash -n woffy
+      - name: Publish stable release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" woffy woffy.version woffy.sha256 --generate-notes --verify-tag
+      - name: Publish rolling nightly
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly woffy woffy.version woffy.sha256 --prerelease --title "Woffy nightly" --target "$GITHUB_SHA"

@@ -5,23 +5,43 @@ on:
   pull_request:
 
 jobs:
-  lint-and-test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck shfmt bats sqlite3
-
-      - name: Shellcheck
-        run: shellcheck woffy.sh install-woffy.sh
-
-      - name: Shfmt
+          sudo apt-get install -y shellcheck shfmt
+      - name: Syntax and shellcheck
         run: |
-          shfmt -d -i 2 -ci woffy.sh install-woffy.sh || true
-          echo "shfmt is currently non-blocking"
+          bash scripts/build-woffy.sh --check
+          bash -n woffy.sh
+          bash -n install-woffy.sh
+          shellcheck woffy.sh install-woffy.sh
+      - name: Formatting
+        run: shfmt -d -i 2 -ci woffy.sh install-woffy.sh
 
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux tooling
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats sqlite3 jq
+      - name: Install macOS tooling
+        if: runner.os == 'macOS'
+        run: brew install bats-core sqlite jq
+      - name: Bash 3.2 compatibility syntax
+        if: runner.os == 'macOS'
+        run: /bin/bash -n woffy.sh
       - name: Bats tests
         run: bats tests
+      - name: VPS update simulation
+        run: bash tests/vps-update-smoke.sh
